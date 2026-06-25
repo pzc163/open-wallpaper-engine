@@ -1670,7 +1670,7 @@ void AddConstantValue(wpscene::WPMaterial& material, std::string name, std::vect
     };
 }
 
-void RegisterMaterialConstants(ParseContext& context, SceneMaterial* material,
+void RegisterMaterialConstants(ParseContext& context, std::shared_ptr<SceneMaterial> material,
                                const wpscene::WPMaterial& wpmat, const WPShaderInfo& info) {
     if (material == nullptr || context.scene->runtime == nullptr) return;
 
@@ -1854,7 +1854,7 @@ void AttachEffectsToNode(ParseContext& context,
             shader_value_data.parallaxDepth = parallax_depth;
             auto mesh = std::make_shared<SceneMesh>();
             mesh->AddMaterial(std::move(material));
-            RegisterMaterialConstants(context, mesh->Material(), wpmat, shader_info);
+            RegisterMaterialConstants(context, mesh->MaterialSlotPtr(), wpmat, shader_info);
             effect_node->AddMesh(mesh);
             context.shader_updater->SetNodeData(effect_node.get(), shader_value_data);
             image_effect->nodes.push_back({ matOutRT, effect_node });
@@ -2272,19 +2272,19 @@ void BuildBloomPostProcess(ParseContext& context, const wpscene::WPScene& sc) {
     context.shader_updater->SetNodeData(combine->node.get(), combine->shader_value_data);
 
     RegisterMaterialConstants(context,
-                              downsample_quarter->node->Mesh()->Material(),
+                              downsample_quarter->node->Mesh()->MaterialSlotPtr(),
                               downsample_quarter->material,
                               downsample_quarter->shader_info);
     RegisterMaterialConstants(context,
-                              downsample_eighth->node->Mesh()->Material(),
+                              downsample_eighth->node->Mesh()->MaterialSlotPtr(),
                               downsample_eighth->material,
                               downsample_eighth->shader_info);
     RegisterMaterialConstants(context,
-                              blur_horizontal->node->Mesh()->Material(),
+                              blur_horizontal->node->Mesh()->MaterialSlotPtr(),
                               blur_horizontal->material,
                               blur_horizontal->shader_info);
     RegisterMaterialConstants(
-        context, combine->node->Mesh()->Material(), combine->material, combine->shader_info);
+        context, combine->node->Mesh()->MaterialSlotPtr(), combine->material, combine->shader_info);
 
     bloom->steps.push_back(ScenePostProcessPass {
         .node   = std::move(downsample_quarter->node),
@@ -2453,7 +2453,7 @@ void ParseImageObj(ParseContext& context, wpscene::WPImageObject& img_obj) {
         }
         context.layer_parent_ids[wpimgobj.id] = wpimgobj.parent_id;
     };
-    const auto registerImageAlphaAnimation = [&context, &wpimgobj](SceneMaterial* material) {
+    const auto registerImageAlphaAnimation = [&context, &wpimgobj](std::shared_ptr<SceneMaterial> material) {
         if (context.scene->runtime == nullptr || material == nullptr || ! wpimgobj.dynamic_alpha)
             return;
         const auto animation = ResolveScalarAnimation(wpimgobj.alpha_setting);
@@ -2641,18 +2641,18 @@ void ParseImageObj(ParseContext& context, wpscene::WPImageObject& img_obj) {
         for (auto& slot : *puppet_material_slots) {
             mesh.AddMaterial(std::move(slot.material));
             const auto material_slot_index = static_cast<uint32_t>(mesh.MaterialSlots().size() - 1);
-            auto*      material_slot       = mesh.MaterialForSlot(material_slot_index);
+            auto        material_slot      = mesh.MaterialSlotPtr(material_slot_index);
             context.shader_updater->SetNodeData(
                 spImgNode.get(), material_slot_index, slot.shader_value_data);
             RegisterMaterialConstants(context, material_slot, slot.source, slot.shader_info);
             registerImageAlphaAnimation(material_slot);
-            RegisterNodeVideoTextureRuntime(context, runtime_name, material_slot);
+            RegisterNodeVideoTextureRuntime(context, runtime_name, material_slot.get());
         }
     } else {
         mesh.AddMaterial(std::move(material));
         RemapSubmeshesToMaterialSlot(mesh, 0);
-        RegisterMaterialConstants(context, spMesh->Material(), wpimgobj.material, shaderInfo);
-        registerImageAlphaAnimation(spMesh->Material());
+        RegisterMaterialConstants(context, spMesh->MaterialSlotPtr(), wpimgobj.material, shaderInfo);
+        registerImageAlphaAnimation(spMesh->MaterialSlotPtr());
         RegisterNodeVideoTextureRuntime(context, runtime_name, spMesh->Material());
     }
     spImgNode->AddMesh(spMesh);
@@ -2746,7 +2746,7 @@ void ParseImageObj(ParseContext& context, wpscene::WPImageObject& img_obj) {
                     auto passthrough_mesh = std::make_shared<SceneMesh>();
                     passthrough_mesh->AddMaterial(std::move(passthrough_material));
                     RegisterMaterialConstants(context,
-                                              passthrough_mesh->Material(),
+                                              passthrough_mesh->MaterialSlotPtr(),
                                               passthrough_wp_material,
                                               passthrough_shader_info);
                     passthrough_node->AddMesh(passthrough_mesh);
@@ -2888,8 +2888,8 @@ void ParseImageObj(ParseContext& context, wpscene::WPImageObject& img_obj) {
                     }
                 }
                 spMesh->AddMaterial(std::move(material));
-                RegisterMaterialConstants(context, spMesh->Material(), wpmat, wpEffShaderInfo);
-                registerImageAlphaAnimation(spMesh->Material());
+                RegisterMaterialConstants(context, spMesh->MaterialSlotPtr(), wpmat, wpEffShaderInfo);
+                registerImageAlphaAnimation(spMesh->MaterialSlotPtr());
                 spEffNode->AddMesh(spMesh);
 
                 context.shader_updater->SetNodeData(spEffNode.get(), svData);
@@ -3246,7 +3246,7 @@ void ParseParticleObj(ParseContext& context, wpscene::WPParticleObject& wppartob
     LoadControlPoint(*particleSub, particle_obj);
 
     mesh.AddMaterial(std::move(material));
-    RegisterMaterialConstants(context, spMesh->Material(), particle_obj.material, shaderInfo);
+    RegisterMaterialConstants(context, spMesh->MaterialSlotPtr(), particle_obj.material, shaderInfo);
     if (! is_child && context.scene->runtime != nullptr && spMesh->Material() != nullptr) {
         const auto runtime_name = LayerRuntimeName(context, wppartobj);
         for (const auto& texture_name : spMesh->Material()->textures) {

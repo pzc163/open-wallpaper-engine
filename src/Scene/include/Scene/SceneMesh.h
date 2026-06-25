@@ -114,6 +114,9 @@ public:
 
 	const std::vector<std::shared_ptr<SceneMaterial>>& MaterialSlots() const { return m_materialSlots; }
 	std::vector<std::shared_ptr<SceneMaterial>>& MaterialSlots() { return m_materialSlots; }
+	std::shared_ptr<SceneMaterial> MaterialSlotPtr(std::size_t index = 0) const {
+		return (index < m_materialSlots.size()) ? m_materialSlots[index] : nullptr;
+	}
 
 	const std::vector<DrawRange>& DrawRanges() const {
 		static const std::vector<DrawRange> kEmpty;
