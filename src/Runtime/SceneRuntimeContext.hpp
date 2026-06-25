@@ -104,14 +104,14 @@ public:
     void PrimeTextValue(DynamicValue& value);
     void RegisterTextValue(std::string name, std::unique_ptr<DynamicValue> value,
                            bool apply_current_value = true);
-    void RegisterMaterialConstant(SceneMaterial* material, std::string name,
+    void RegisterMaterialConstant(std::shared_ptr<SceneMaterial> material, std::string name,
                                   std::unique_ptr<DynamicValue> value);
     void RegisterSceneClearColor(std::unique_ptr<DynamicValue> value);
     void RegisterDynamicValueListener(std::unique_ptr<DynamicValue> value,
                                       std::function<void(const DynamicValue&)> callback);
     void RegisterNodeEffectFinal(std::string name, SceneNode* node, SceneImageEffectLayer* layer,
                                  TextLayerRenderFrame target_frame = {});
-    void RegisterMaterialAlphaAnimation(SceneMaterial* material, ScalarAnimation animation);
+    void RegisterMaterialAlphaAnimation(std::shared_ptr<SceneMaterial> material, ScalarAnimation animation);
     void RegisterSceneScript(std::string script_source, std::string layer_name);
     void RegisterNodeVideoTexture(std::string name, std::string texture_key);
     void RegisterSoundLayer(std::string name, std::shared_ptr<WPSoundStream> stream);
@@ -201,13 +201,13 @@ private:
         TextLayerRenderFrame   target_frame {};
     };
     struct MaterialAlphaBinding {
-        SceneMaterial*  material { nullptr };
-        ScalarAnimation animation {};
+        std::weak_ptr<SceneMaterial> material;
+        ScalarAnimation              animation {};
     };
     struct MaterialConstantBinding {
-        SceneMaterial* material { nullptr };
-        std::string    name;
-        DynamicValue*  value { nullptr };
+        std::weak_ptr<SceneMaterial> material;
+        std::string                  name;
+        DynamicValue*                value { nullptr };
     };
     struct TextValueBinding {
         std::string   name;

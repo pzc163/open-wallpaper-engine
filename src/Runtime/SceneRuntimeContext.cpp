@@ -206,8 +206,8 @@ bool HitTestNode(SceneNode& node, Eigen::Vector2f size, const Eigen::Vector3f& c
 }
 
 struct ClonedMaterialBinding {
-    SceneMaterial* source_material { nullptr };
-    SceneMaterial* cloned_material { nullptr };
+    std::shared_ptr<SceneMaterial> source_material;
+    std::shared_ptr<SceneMaterial> cloned_material;
 };
 
 std::shared_ptr<SceneMesh> CloneMesh(SceneMesh&                          mesh,
@@ -221,8 +221,8 @@ std::shared_ptr<SceneMesh> CloneMesh(SceneMesh&                          mesh,
         clone->AddMaterial(SceneMaterial(*mesh.Material()));
         if (material_bindings != nullptr) {
             material_bindings->push_back(ClonedMaterialBinding {
-                .source_material = mesh.Material(),
-                .cloned_material = clone->Material(),
+                .source_material = mesh.MaterialSlotPtr(),
+                .cloned_material = clone->MaterialSlotPtr(),
             });
         }
     }
@@ -467,20 +467,25 @@ void SceneRuntimeContext::Tick(double frame_time) {
         SyncEffectFinalNode(*binding.node, *binding.layer);
     }
     for (auto& binding : m_material_alpha) {
-        if (binding.material == nullptr) continue;
-        ApplyMaterialAlpha(*binding.material,
+        auto material = binding.material.lock();
+        if (material == nullptr) continue;
+        ApplyMaterialAlpha(*material,
                            binding.animation.Evaluate(m_host_context->runtime_seconds));
     }
     for (auto& binding : m_material_constants) {
-        if (binding.material == nullptr || binding.value == nullptr) continue;
-        ApplyMaterialConstant(*binding.material, binding.name, *binding.value);
+        if (binding.value == nullptr) continue;
+        auto material = binding.material.lock();
+        if (material == nullptr) continue;
+        ApplyMaterialConstant(*material, binding.name, *binding.value);
     }
     for (auto& script : m_scene_scripts) {
         if (script.script != nullptr) script.script->Tick(*m_host_context);
     }
     for (auto& binding : m_material_constants) {
-        if (binding.material == nullptr || binding.value == nullptr) continue;
-        ApplyMaterialConstant(*binding.material, binding.name, *binding.value);
+        if (binding.value == nullptr) continue;
+        auto material = binding.material.lock();
+        if (material == nullptr) continue;
+        ApplyMaterialConstant(*material, binding.name, *binding.value);
     }
 }
 
@@ -960,7 +965,8 @@ void SceneRuntimeContext::RegisterTextValue(std::string name,
     });
 }
 
-void SceneRuntimeContext::RegisterMaterialConstant(SceneMaterial* material, std::string name,
+void SceneRuntimeContext::RegisterMaterialConstant(std::shared_ptr<SceneMaterial> material,
+                                                   std::string name,
                                                    std::unique_ptr<DynamicValue> value) {
     if (material == nullptr || name.empty() || value == nullptr) return;
 
@@ -1015,8 +1021,8 @@ void SceneRuntimeContext::RegisterNodeEffectFinal(std::string name,
     };
 }
 
-void SceneRuntimeContext::RegisterMaterialAlphaAnimation(SceneMaterial*  material,
-                                                         ScalarAnimation animation) {
+void SceneRuntimeContext::RegisterMaterialAlphaAnimation(std::shared_ptr<SceneMaterial> material,
+                                                         ScalarAnimation                  animation) {
     if (material == nullptr) return;
     ApplyMaterialAlpha(*material, animation.Evaluate(m_host_context->runtime_seconds));
     m_material_alpha.push_back(MaterialAlphaBinding {
@@ -1225,7 +1231,9 @@ std::string SceneRuntimeContext::CreateLayerFromTemplate(std::string_view reques
         }
         for (std::size_t index = 0; index < source_constant_count; ++index) {
             const auto& constant_binding = m_material_constants[index];
-            if (constant_binding.material != material_binding.source_material ||
+            const auto  locked_material  = constant_binding.material.lock();
+            if (locked_material == nullptr ||
+                locked_material != material_binding.source_material ||
                 constant_binding.value == nullptr) {
                 continue;
             }

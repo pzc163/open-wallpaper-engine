@@ -231,30 +231,30 @@ TEST(MediaThumbnailTextureSmoke, RuntimeMaterialConstantsFollowProjectProperties
     });
     ASSERT_NE(runtime, nullptr);
 
-    SceneMaterial material;
+    auto material = std::make_shared<SceneMaterial>();
     runtime->RegisterMaterialConstant(
-        &material,
+        material,
         "g_Color",
         BoundValue(
             *runtime,
             "ypcolor",
             std::make_unique<DynamicValue>(Eigen::Vector3f(0.0f, 0.0f, 0.0f))));
     runtime->RegisterMaterialConstant(
-        &material,
+        material,
         "g_UserAlpha",
         BoundValue(
             *runtime,
             "alpha",
             std::make_unique<DynamicValue>(1.0f)));
 
-    ASSERT_TRUE(material.customShader.constValues.contains("g_Color"));
-    ASSERT_EQ(material.customShader.constValues.at("g_Color").size(), 3u);
-    EXPECT_FLOAT_EQ(material.customShader.constValues.at("g_Color")[0], 1.0f);
-    EXPECT_FLOAT_EQ(material.customShader.constValues.at("g_Color")[1], 0.8117647f);
-    EXPECT_FLOAT_EQ(material.customShader.constValues.at("g_Color")[2], 0.8705882f);
-    ASSERT_TRUE(material.customShader.constValues.contains("g_UserAlpha"));
-    ASSERT_EQ(material.customShader.constValues.at("g_UserAlpha").size(), 1u);
-    EXPECT_FLOAT_EQ(material.customShader.constValues.at("g_UserAlpha")[0], 0.75f);
+    ASSERT_TRUE(material->customShader.constValues.contains("g_Color"));
+    ASSERT_EQ(material->customShader.constValues.at("g_Color").size(), 3u);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("g_Color")[0], 1.0f);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("g_Color")[1], 0.8117647f);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("g_Color")[2], 0.8705882f);
+    ASSERT_TRUE(material->customShader.constValues.contains("g_UserAlpha"));
+    ASSERT_EQ(material->customShader.constValues.at("g_UserAlpha").size(), 1u);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("g_UserAlpha")[0], 0.75f);
 
     runtime->ApplyProjectPropertyOverride({
         { "ypcolor", RuntimeScalarValue::String("0.25 0.5 0.75") },
@@ -262,12 +262,12 @@ TEST(MediaThumbnailTextureSmoke, RuntimeMaterialConstantsFollowProjectProperties
     });
     runtime->Tick(1.0 / 60.0);
 
-    ASSERT_EQ(material.customShader.constValues.at("g_Color").size(), 3u);
-    EXPECT_FLOAT_EQ(material.customShader.constValues.at("g_Color")[0], 0.25f);
-    EXPECT_FLOAT_EQ(material.customShader.constValues.at("g_Color")[1], 0.5f);
-    EXPECT_FLOAT_EQ(material.customShader.constValues.at("g_Color")[2], 0.75f);
-    ASSERT_EQ(material.customShader.constValues.at("g_UserAlpha").size(), 1u);
-    EXPECT_FLOAT_EQ(material.customShader.constValues.at("g_UserAlpha")[0], 0.25f);
+    ASSERT_EQ(material->customShader.constValues.at("g_Color").size(), 3u);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("g_Color")[0], 0.25f);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("g_Color")[1], 0.5f);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("g_Color")[2], 0.75f);
+    ASSERT_EQ(material->customShader.constValues.at("g_UserAlpha").size(), 1u);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("g_UserAlpha")[0], 0.25f);
 }
 
 TEST(MediaThumbnailTextureSmoke, RuntimeMaterialConstantsEvaluatePropertyScriptsEachTick) {
@@ -278,7 +278,7 @@ TEST(MediaThumbnailTextureSmoke, RuntimeMaterialConstantsEvaluatePropertyScripts
     });
     ASSERT_NE(runtime, nullptr);
 
-    SceneMaterial material;
+    auto material = std::make_shared<SceneMaterial>();
     const nlohmann::json setting = {
         {
             "script",
@@ -298,20 +298,20 @@ export function update(value) {
     };
 
     auto value = ResolveVec3Setting(*runtime, setting, "bar material");
-    runtime->RegisterMaterialConstant(&material, "g_TintColor", std::move(value));
+    runtime->RegisterMaterialConstant(material, "g_TintColor", std::move(value));
 
     runtime->Tick(0.25);
-    ASSERT_TRUE(material.customShader.constValues.contains("g_TintColor"));
-    ASSERT_EQ(material.customShader.constValues.at("g_TintColor").size(), 3u);
-    EXPECT_FLOAT_EQ(material.customShader.constValues.at("g_TintColor")[0], 0.5f);
-    EXPECT_FLOAT_EQ(material.customShader.constValues.at("g_TintColor")[1], 0.25f);
+    ASSERT_TRUE(material->customShader.constValues.contains("g_TintColor"));
+    ASSERT_EQ(material->customShader.constValues.at("g_TintColor").size(), 3u);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("g_TintColor")[0], 0.5f);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("g_TintColor")[1], 0.25f);
 
     runtime->ApplyProjectPropertyOverride({
         { "speed", RuntimeScalarValue::Float(0.75f) },
     });
     runtime->Tick(0.5);
-    EXPECT_FLOAT_EQ(material.customShader.constValues.at("g_TintColor")[0], 0.75f);
-    EXPECT_FLOAT_EQ(material.customShader.constValues.at("g_TintColor")[1], 0.75f);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("g_TintColor")[0], 0.75f);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("g_TintColor")[1], 0.75f);
     EXPECT_EQ(runtime->scriptErrorCount(), 0u);
 }
 
@@ -380,7 +380,7 @@ TEST(MediaThumbnailTextureSmoke, GeneratedTemplateLayersKeepMaterialConstantBind
                                    source_node,
                                    Eigen::Vector2f(20.0f, 10.0f));
     runtime->RegisterMaterialConstant(
-        source_mesh->Material(),
+        source_mesh->MaterialSlotPtr(),
         "g_Color",
         BoundValue(
             *runtime,

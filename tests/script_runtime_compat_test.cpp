@@ -443,7 +443,7 @@ TEST(ScriptRuntimeCompat, CreateLayerClonesTemplateAndFansOutMaterialBindings) {
     runtime->RegisterLayerTemplate("models/workshop/123456/bar.json",
                                    source_node,
                                    Eigen::Vector2f(20.0f, 10.0f));
-    runtime->RegisterMaterialConstant(source_mesh->Material(), "g_Tint", std::make_unique<DynamicValue>(tint));
+    runtime->RegisterMaterialConstant(source_mesh->MaterialSlotPtr(), "g_Tint", std::make_unique<DynamicValue>(tint));
 
     runtime->RegisterSceneScript(
         R"JS(
@@ -540,7 +540,7 @@ export function update(value) {
 
     DynamicValue tint(Eigen::Vector3f(0.25f, 0.5f, 0.75f));
     runtime->RegisterMaterialConstant(
-        source_mesh->Material(), "g_Tint", std::make_unique<DynamicValue>(tint));
+        source_mesh->MaterialSlotPtr(), "g_Tint", std::make_unique<DynamicValue>(tint));
 
     runtime->Tick(1.0 / 60.0);
 
@@ -567,9 +567,9 @@ TEST(ScriptRuntimeCompat, MaterialConstantUserBindingUpdatesThroughRuntimeProper
     });
     ASSERT_NE(runtime, nullptr);
 
-    SceneMaterial material;
+    auto material = std::make_shared<SceneMaterial>();
     runtime->RegisterMaterialConstant(
-        &material,
+        material,
         "g_Tint",
         ResolveVec3Setting(
             *runtime,
@@ -579,8 +579,8 @@ TEST(ScriptRuntimeCompat, MaterialConstantUserBindingUpdatesThroughRuntimeProper
             }));
 
     runtime->Tick(1.0 / 60.0);
-    auto constant = material.customShader.constValues.find("g_Tint");
-    ASSERT_NE(constant, material.customShader.constValues.end());
+    auto constant = material->customShader.constValues.find("g_Tint");
+    ASSERT_NE(constant, material->customShader.constValues.end());
     ASSERT_EQ(constant->second.size(), 3u);
     EXPECT_FLOAT_EQ(constant->second[0], 0.25f);
     EXPECT_FLOAT_EQ(constant->second[1], 0.5f);
@@ -591,8 +591,8 @@ TEST(ScriptRuntimeCompat, MaterialConstantUserBindingUpdatesThroughRuntimeProper
     });
     runtime->Tick(1.0 / 60.0);
 
-    constant = material.customShader.constValues.find("g_Tint");
-    ASSERT_NE(constant, material.customShader.constValues.end());
+    constant = material->customShader.constValues.find("g_Tint");
+    ASSERT_NE(constant, material->customShader.constValues.end());
     ASSERT_EQ(constant->second.size(), 3u);
     EXPECT_FLOAT_EQ(constant->second[0], 0.1f);
     EXPECT_FLOAT_EQ(constant->second[1], 0.2f);
