@@ -398,6 +398,8 @@ TEST(ScriptRuntimeCompat, HostVectorUpdatesDoNotCallMutableGlobalVectorConstruct
 var savedVec2 = Vec2;
 var savedVec3 = Vec3;
 var savedVec4 = Vec4;
+export var scriptProperties = createScriptProperties()
+    .addColor({ name: 'tint', value: '1 1 1' }).finish();
 Vec2 = function(x, y) { return new Vec2(x, y); };
 Vec3 = function(x, y, z) { return new Vec3(x, y, z); };
 Vec4 = function(x, y, z, w) { return new Vec4(x, y, z, w); };
@@ -420,6 +422,26 @@ export function update(value) {
     const auto result = program->Evaluate(host, DynamicValue(0.0f));
     ASSERT_NE(result, nullptr);
     EXPECT_FLOAT_EQ(result->getFloat(), 279.0f);
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+TEST(ScriptRuntimeCompat, ScreenCoordinatesFollowPhysicalOutputWithoutChangingCanvasSize) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap { .canvas_width = 1920, .canvas_height = 1080 });
+    runtime->SetScreenSize(2560, 1600);
+    auto host = runtime->hostContext();
+    host.cursor_normalized_position = Eigen::Vector2f(0.25f, 0.75f);
+    host.cursor_world_position = Eigen::Vector3f(1, 2, 3);
+    auto program = runtime->scriptEngine().CreatePropertyScriptProgram(runtime.get(), R"JS(
+export function update(value) {
+  return engine.canvasSize.x + engine.screenResolution.x + engine.screenResolution.y +
+         input.cursorScreenPosition.x + input.cursorScreenPosition.y;
+}
+)JS", "", {}, DynamicValue(0.0f), host);
+    ASSERT_NE(program, nullptr);
+    EXPECT_FLOAT_EQ(program->Evaluate(host, DynamicValue(0.0f))->getFloat(), 7120.0f);
+    runtime->SetScreenSize(3840, 2160);
+    host.screen_size = runtime->hostContext().screen_size;
+    EXPECT_FLOAT_EQ(program->Evaluate(host, DynamicValue(0.0f))->getFloat(), 9420.0f);
     EXPECT_EQ(runtime->scriptErrorCount(), 0u);
 }
 
@@ -855,7 +877,9 @@ function cursorDown(event) {
   if (event.button === 1 &&
       event.normalizedPosition.x === 0.25 &&
       event.position.x === 480 &&
-      event.worldPosition.y === 270) ok++;
+      event.worldPosition.y === 270 &&
+      event.screenPosition.x === 640 &&
+      event.screenPosition.y === 400) ok++;
 }
 function update() {
   if (ok === 1) scene.getObject('probe').visible = true;
@@ -863,6 +887,7 @@ function update() {
 )JS",
         "");
 
+    runtime->SetScreenSize(2560, 1600);
     runtime->SetCursorInput(0.25f, 0.75f);
     runtime->SetCursorButton(1, true);
     runtime->DispatchCursorDown(1);
@@ -1094,6 +1119,118 @@ TEST(ShaderValueUpdaterCompat, SlotRenderTargetUniformsUseSlotShaderValueData) {
 
     delete scene.activeCamera;
     scene.activeCamera = nullptr;
+}
+
+TEST(ShaderValueUpdaterCompat, PerspectiveEyeAndPaddedNormalMatrixFollowWorldTransforms) {
+    Scene scene;
+    SceneCamera camera(16.0f / 9.0f, 0.01f, 1000.0f, 50.0f);
+    auto camera_node = std::make_shared<SceneNode>();
+    camera_node->SetTranslate({ 2, 3, 4 });
+    camera.AttatchNode(camera_node);
+    scene.activeCamera = &camera;
+    auto parent = std::make_shared<SceneNode>();
+    parent->SetScale({ 2, 3, 4 });
+    auto node = std::make_shared<SceneNode>();
+    auto mesh = std::make_shared<SceneMesh>();
+    mesh->AddMaterial(SceneMaterial {});
+    node->AddMesh(mesh);
+    parent->AppendChild(node);
+    WPShaderValueUpdater updater(&scene);
+    updater.InitUniforms(node.get(), 0, [](std::string_view name) {
+        return name == "g_EyePosition" || name == "g_NormalModelMatrix";
+    });
+    sprite_map_t sprites;
+    std::unordered_map<std::string, ShaderValue> values;
+    updater.UpdateUniforms(node.get(), 0, sprites, [&](std::string_view name, ShaderValue value) {
+        values.insert_or_assign(std::string(name), std::move(value));
+    });
+    ASSERT_TRUE(values.contains("g_EyePosition"));
+    ASSERT_TRUE(values.contains("g_NormalModelMatrix"));
+    const auto& eye = values.at("g_EyePosition");
+    EXPECT_FLOAT_EQ(eye[0], 2);
+    EXPECT_FLOAT_EQ(eye[1], 3);
+    EXPECT_FLOAT_EQ(eye[2], 4);
+    const auto& normal = values.at("g_NormalModelMatrix");
+    EXPECT_FLOAT_EQ(normal[0], 0.5f);
+    EXPECT_FLOAT_EQ(normal[5], 1.0f / 3.0f);
+    EXPECT_FLOAT_EQ(normal[10], 0.25f);
+    EXPECT_FLOAT_EQ(normal[3], 0);
+    EXPECT_FLOAT_EQ(normal[7], 0);
+    EXPECT_FLOAT_EQ(normal[11], 0);
+    scene.activeCamera = nullptr;
+}
+
+TEST(ScriptRuntimeCompat, ObjectImageLayersKeepOwnerAndIndependentAppearanceAcrossFrames) {
+    Scene scene;
+    auto runtime = MakeRuntimeWithScene(scene);
+    auto parent = std::make_shared<SceneNode>();
+    auto owner = std::make_shared<SceneNode>();
+    owner->SetName("owner");
+    parent->AppendChild(owner);
+    scene.sceneGraph->AppendChild(parent);
+    runtime->RegisterNode("owner", owner.get());
+    auto source = std::make_shared<SceneNode>();
+    source->SetName("source");
+    source->SetVisible(false);
+    auto mesh = std::make_shared<SceneMesh>();
+    SceneMaterial material;
+    material.customShader.constValues["g_Alpha"] = 1.0f;
+    mesh->AddMaterial(std::move(material));
+    source->AddMesh(mesh);
+    scene.sceneGraph->AppendChild(source);
+    runtime->RegisterNode("source", source.get());
+    runtime->RegisterLayerTemplate("models/point.json", source, Eigen::Vector2f(32,32));
+    auto program = runtime->scriptEngine().CreatePropertyScriptProgram(runtime.get(), R"JS(
+let previous;
+export function update(value) {
+  const point = thisScene.createLayer({
+    image: 'models/point.json', origin: new Vec3(value + 1, 2, 3),
+    color: new Vec3(0.25, 0.5, 0.75), alpha: 0.2, visible: true, scale: '0.1 0.2 0.3'
+  });
+  if (previous) previous.alpha = 0.6;
+  previous = point;
+  return value + 1;
+}
+)JS", "owner", {}, DynamicValue(0.0f), runtime->hostContext());
+    // A later script must not overwrite the earlier script's createLayer owner.
+    auto other = runtime->scriptEngine().CreatePropertyScriptProgram(runtime.get(),
+        "export function update(value) { return value; }", "source", {},
+        DynamicValue(0.0f), runtime->hostContext());
+    auto first = program->Evaluate(runtime->hostContext(), DynamicValue(0.0f));
+    auto second = program->Evaluate(runtime->hostContext(), *first);
+    ASSERT_NE(second, nullptr);
+    ASSERT_EQ(parent->GetChildren().size(), 3u);
+    auto a = *std::next(parent->GetChildren().begin()), b = *std::next(parent->GetChildren().begin(), 2);
+    EXPECT_NE(a.get(), b.get());
+    EXPECT_TRUE(a->Visible());
+    EXPECT_FLOAT_EQ(a->Translate().x(), 1);
+    EXPECT_FLOAT_EQ(b->Translate().x(), 2);
+    EXPECT_FLOAT_EQ(a->Scale().y(), 0.2f);
+    EXPECT_FLOAT_EQ(a->Mesh()->Material()->customShader.constValues.at("g_Alpha")[0], 0.6f);
+    EXPECT_FLOAT_EQ(b->Mesh()->Material()->customShader.constValues.at("g_Color4")[3], 0.2f);
+    EXPECT_FLOAT_EQ(b->Mesh()->Material()->customShader.constValues.at("g_Color")[2], 0.75f);
+    EXPECT_FALSE(source->Visible());
+    EXPECT_FLOAT_EQ(source->Mesh()->Material()->customShader.constValues.at("g_Alpha")[0], 1.0f);
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+TEST(ScriptRuntimeCompat, FloatAppearanceScriptAdvancesAndUpdatesAllAlphaUniforms) {
+    Scene scene;
+    auto runtime = MakeRuntimeWithScene(scene);
+    auto material = std::make_shared<SceneMaterial>();
+    material->customShader.constValues["g_Alpha"] = 1.0f;
+    material->customShader.constValues["g_Color4"] = std::array<float, 4>{0.2f,0.4f,0.6f,1};
+    runtime->RegisterMaterialAlpha(material, ResolveFloatSetting(*runtime, {
+        {"value", 1.0}, {"script", "export function update(value) { return Math.max(0, 1 - engine.runtime); }"}
+    }, "fade"));
+    runtime->Tick(0.25);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("g_Alpha")[0], 0.75f);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("g_UserAlpha")[0], 0.75f);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("g_Color4")[3], 0.75f);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("g_Color4")[0], 0.2f);
+    runtime->Tick(1.0);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("g_Alpha")[0], 0);
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
 }
 
 } // namespace

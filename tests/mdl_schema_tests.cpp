@@ -1233,6 +1233,37 @@ float RootTranslationY(WPPuppetLayer& layer, double time) {
 
 } // namespace
 
+TEST(MdlSchema, ParsesMdlv16StaticFlaggedMeshAndRejectsTruncatedVertices) {
+    Bytes b;
+    b.Stamp("MDL", 16);
+    b.U32(15); b.U32(1); b.U32(1);
+    b.Str("materials/cylinder.json");
+    b.U32(0); b.U32(15); b.U32(3 * 48);
+    for (int i = 0; i < 3; ++i) {
+        b.F32(static_cast<float>(i)); b.F32(0); b.F32(0);
+        b.F32(0); b.F32(0); b.F32(1);
+        b.F32(1); b.F32(0); b.F32(0); b.F32(1);
+        b.F32(static_cast<float>(i) / 2); b.F32(0.5f);
+    }
+    b.U32(6); b.U16(0); b.U16(1); b.U16(2);
+    auto bytes = b.Take();
+    fs::VFS vfs;
+    MountMdlFixture(vfs, bytes);
+    WPMdl mdl;
+    ASSERT_TRUE(WPMdlParser::Parse("sample.mdl", vfs, mdl));
+    ASSERT_EQ(mdl.meshes.size(), 1u);
+    ASSERT_EQ(mdl.meshes[0].normals.size(), 3u);
+    EXPECT_FLOAT_EQ(mdl.meshes[0].positions[2][0], 2);
+    EXPECT_FLOAT_EQ(mdl.meshes[0].texcoords[2][0], 1);
+    EXPECT_EQ(mdl.meshes[0].indices[0][2], 2);
+    EXPECT_EQ(mdl.puppet, nullptr);
+    bytes.resize(bytes.size() - 25);
+    fs::VFS truncated;
+    MountMdlFixture(truncated, bytes);
+    WPMdl invalid;
+    EXPECT_FALSE(WPMdlParser::Parse("sample.mdl", truncated, invalid));
+}
+
 TEST(MdlSchema, AdditiveSingleAnimationUsesFinalFrameAsNeutralAndHolds) {
     auto puppet = BuildOneBonePuppet(WPPuppet::PlayMode::Single, 440.0f, 0.0f);
     auto layer = BuildAdditiveLayer(puppet);
@@ -1882,4 +1913,43 @@ TEST(MdlSchema, MeshCountGreaterThanOneDoesNotSelectMdlv21PathBeforeMdlv21) {
     EXPECT_EQ(mdl.mdlv, 20);
     EXPECT_TRUE(mdl.meshes.empty());
     EXPECT_EQ(mdl.mat_json_file, "legacy.json");
+}
+
+TEST(MdlSchema, PreservesWideIndicesAndLitVertexAttributesForLarge3DModels) {
+    Bytes bytes;
+    bytes.Stamp("MDL", 23);
+    bytes.U32(0); bytes.U32(1); bytes.U32(1);
+    bytes.Str("materials/sphere.json"); bytes.U32(0);
+    for (int i=0;i<6;++i) bytes.F32(i<3 ? -1.0f : 1.0f);
+    bytes.U32(0x0f); // position, normal, tangent, UV
+    constexpr uint32_t count = 65537;
+    bytes.U32(count * 48);
+    for (uint32_t i=0;i<count;++i) {
+        for (float value : { 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f,
+                             1.0f, 0.0f, 0.0f, -1.0f, 0.25f, 0.75f }) bytes.F32(value);
+    }
+    bytes.U32(12); bytes.U32(0); bytes.U32(65535); bytes.U32(65536);
+    bytes.U8(0); bytes.U8(0); bytes.U32(0); // no extras / parts / masks
+    fs::VFS vfs;
+    MountMdlFixture(vfs, bytes.Take());
+    WPMdl model;
+    ASSERT_TRUE(WPMdlParser::Parse("sample.mdl", vfs, model));
+    ASSERT_EQ(model.meshes.size(), 1u);
+    ASSERT_EQ(model.meshes[0].indices32.size(), 1u);
+    EXPECT_EQ(model.meshes[0].indices32[0][2], 65536u);
+    SceneMesh mesh;
+    WPMdlParser::GenPuppetMesh(mesh, model);
+    ASSERT_EQ(mesh.Submeshes().size(), 1u);
+    EXPECT_TRUE(mesh.GetIndexArray(0).WideIndices());
+    EXPECT_EQ(mesh.GetIndexArray(0).DataCount(), 3u);
+    EXPECT_EQ(mesh.GetIndexArray(0).Data()[2], 65536u);
+    const auto& vertex = mesh.GetVertexArray(0);
+    const auto attributes = vertex.GetAttrOffsetMap();
+    ASSERT_TRUE(attributes.contains("a_Normal"));
+    ASSERT_TRUE(attributes.contains("a_Tangent4"));
+    const auto* normal = vertex.Data() + attributes.at("a_Normal").offset / sizeof(float);
+    const auto* tangent = vertex.Data() + attributes.at("a_Tangent4").offset / sizeof(float);
+    EXPECT_FLOAT_EQ(normal[2], 1.0f);
+    EXPECT_FLOAT_EQ(tangent[0], 1.0f);
+    EXPECT_FLOAT_EQ(tangent[3], -1.0f);
 }

@@ -1100,7 +1100,7 @@ void AppendCommonHostBootstrap(std::ostringstream& wrapper) {
         << "  globalThis.input.cursorLocalPosition = globalThis.input.cursorLocalPosition || "
            "globalThis.__cursorWorldPosition;\n"
         << "  globalThis.input.cursorScreenPosition = globalThis.input.cursorScreenPosition || "
-           "globalThis.__cursorWorldPosition;\n"
+           "globalThis.__cursorScreenPosition;\n"
         << "  globalThis.input.mouseButtonsDown = globalThis.__mouseButtonsDown || 0;\n"
         << "  globalThis.input.mouseButtonsPressed = globalThis.__mouseButtonsPressed || 0;\n"
         << "  globalThis.input.mouseButtonsReleased = globalThis.__mouseButtonsReleased || 0;\n"
@@ -1242,7 +1242,9 @@ void AppendCommonHostBootstrap(std::ostringstream& wrapper) {
         << "      get text() { return __layerGetText(name); },\n"
         << "      set text(v) { __layerSetText(name, v); },\n"
         << "      get alpha() { return state.alpha; },\n"
-        << "      set alpha(v) { state.alpha = Number(v) || 0; },\n"
+        << "      set alpha(v) { state.alpha = Number(v) || 0; __layerSetAlpha(name, state.alpha); },\n"
+        << "      get color() { return state.color || new Vec3(1, 1, 1); },\n"
+        << "      set color(v) { state.color = v; __layerSetColor(name, v); },\n"
         << "      play: function() {\n"
         << "        if (__soundKnown(name)) {\n"
         << "          __soundPlay(name);\n"
@@ -1343,13 +1345,24 @@ void AppendCommonHostBootstrap(std::ostringstream& wrapper) {
         << "    return globalThis.__layerOrder.indexOf(name);\n"
         << "  };\n"
         << "  __sceneBase.__createLayerFor = function(currentLayerName, sourcePath) {\n"
-        << "    var templateName = String(sourcePath || '');\n"
-        << "    var generatedName = __layerCreate(templateName, String(currentLayerName || ''));\n"
+        << "    var config = sourcePath && typeof sourcePath === 'object' ? sourcePath : null;\n"
+        << "    var templateName = String(config ? (config.image || '') : (sourcePath || ''));\n"
+        << "    var generatedName = __layerCreate(templateName, String(currentLayerName || ''), !config);\n"
+        << "    if (config && !generatedName) return null;\n"
         << "    if (!generatedName) generatedName = '__generated_layer_' + "
            "(globalThis.__nextGeneratedLayerId++) + ':' + templateName;\n"
         << "    if (!globalThis.__layerCache[generatedName]) {\n"
         << "      var generated = __createLayer(generatedName);\n"
         << "      generated.template = templateName;\n"
+        << "      if (config) {\n"
+        << "        function vector(v, fallback) { if (typeof v === 'string') { var c = v.trim().split(/\\s+/).map(Number); return new Vec3(c[0], c[1], c[2]); } return v === undefined ? fallback : v; }\n"
+        << "        generated.origin = vector(config.origin, new Vec3(0, 0, 0));\n"
+        << "        generated.scale = vector(config.scale, new Vec3(1, 1, 1));\n"
+        << "        generated.angles = vector(config.angles, new Vec3(0, 0, 0));\n"
+        << "        generated.color = vector(config.color, new Vec3(1, 1, 1));\n"
+        << "        generated.alpha = config.alpha === undefined ? 1 : config.alpha;\n"
+        << "        generated.visible = config.visible === undefined ? true : config.visible;\n"
+        << "      }\n"
         << "      globalThis.__layerCache[generatedName] = generated;\n"
         << "    }\n"
         << "    return globalThis.__layerCache[generatedName];\n"
@@ -1381,6 +1394,22 @@ void AppendCommonHostBootstrap(std::ostringstream& wrapper) {
 
 JSValue CreateCanvasSizeObject(JSContext* context, const ScriptHostContext& host_context) {
     return CreateJsVec2(context, host_context.canvas_size.x(), host_context.canvas_size.y());
+}
+
+Eigen::Vector2f ScreenSize(const ScriptHostContext& host) {
+    return host.screen_size.x() > 0.0f && host.screen_size.y() > 0.0f
+               ? host.screen_size : host.canvas_size;
+}
+
+JSValue CreateScreenSizeObject(JSContext* context, const ScriptHostContext& host) {
+    const auto size = ScreenSize(host);
+    return CreateJsVec2(context, size.x(), size.y());
+}
+
+JSValue CreateCursorScreenPositionObject(JSContext* context, const ScriptHostContext& host) {
+    const auto size = ScreenSize(host);
+    return CreateJsVec2(context, host.cursor_normalized_position.x() * size.x(),
+                        (1.0f - host.cursor_normalized_position.y()) * size.y());
 }
 
 JSValue CreateCursorWorldPositionObject(JSContext* context, const ScriptHostContext& host_context) {
@@ -1500,6 +1529,8 @@ void PopulateEngineObject(JSContext* context, JSValue engine_object,
     JS_SetPropertyStr(
         context, engine_object, "canvasSize", CreateCanvasSizeObject(context, host_context));
     JS_SetPropertyStr(
+        context, engine_object, "screenResolution", CreateScreenSizeObject(context, host_context));
+    JS_SetPropertyStr(
         context, engine_object, "frametime", JS_NewFloat64(context, host_context.frame_time));
     JS_SetPropertyStr(
         context, engine_object, "runtime", JS_NewFloat64(context, host_context.runtime_seconds));
@@ -1530,6 +1561,7 @@ void UpdateEngineObject(JSContext* context, JSValue global_object,
         std::abs(cache_state.last_host_context.runtime_seconds - host_context.runtime_seconds) >
             1.0e-9 ||
         ! cache_state.last_host_context.canvas_size.isApprox(host_context.canvas_size, 1.0e-6f) ||
+        ! cache_state.last_host_context.screen_size.isApprox(host_context.screen_size, 1.0e-6f) ||
         ! cache_state.last_host_context.cursor_normalized_position.isApprox(
             host_context.cursor_normalized_position, 1.0e-6f) ||
         ! cache_state.last_host_context.cursor_world_position.isApprox(
@@ -1546,6 +1578,8 @@ void UpdateEngineObject(JSContext* context, JSValue global_object,
                               engine_object,
                               "canvasSize",
                               CreateCanvasSizeObject(context, host_context));
+            JS_SetPropertyStr(context, engine_object, "screenResolution",
+                              CreateScreenSizeObject(context, host_context));
             JS_SetPropertyStr(context,
                               engine_object,
                               "frametime",
@@ -1576,7 +1610,7 @@ void UpdateEngineObject(JSContext* context, JSValue global_object,
             JS_SetPropertyStr(context,
                               input_object,
                               "cursorScreenPosition",
-                              CreateCursorWorldPositionObject(context, host_context));
+                              CreateCursorScreenPositionObject(context, host_context));
             JS_SetPropertyStr(context,
                               input_object,
                               "mouseButtonsDown",
@@ -1661,6 +1695,8 @@ void UpdateEngineObject(JSContext* context, JSValue global_object,
                           global_object,
                           "__cursorWorldPosition",
                           CreateCursorWorldPositionObject(context, host_context));
+        JS_SetPropertyStr(context, global_object, "__cursorScreenPosition",
+                          CreateCursorScreenPositionObject(context, host_context));
 
         JSValue canvas_size = CreateCanvasSizeObject(context, host_context);
         JS_SetPropertyStr(context, global_object, "canvasSize", JS_DupValue(context, canvas_size));
@@ -1814,6 +1850,30 @@ JSValue JsLayerSetOrigin(JSContext* context, JSValueConst, int argc, JSValueCons
     return JS_UNDEFINED;
 }
 
+JSValue JsLayerSetAlpha(JSContext* context, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2) return JS_UNDEFINED;
+    auto* bridge = GetBridgeState(context);
+    if (!bridge || !bridge->runtime) return JS_UNDEFINED;
+    const char* name = JS_ToCString(context, argv[0]);
+    double alpha = 1.0;
+    if (name && JS_ToFloat64(context, &alpha, argv[1]) == 0 && std::isfinite(alpha))
+        bridge->runtime->SetNodeAlpha(name, static_cast<float>(alpha));
+    if (name) JS_FreeCString(context, name);
+    return JS_UNDEFINED;
+}
+
+JSValue JsLayerSetColor(JSContext* context, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2) return JS_UNDEFINED;
+    auto* bridge = GetBridgeState(context);
+    if (!bridge || !bridge->runtime) return JS_UNDEFINED;
+    const char* name = JS_ToCString(context, argv[0]);
+    auto value = JsToDynamicValue(context, argv[1], DynamicValue::Vec3);
+    if (name && value && value->getVec3().allFinite())
+        bridge->runtime->SetNodeColor(name, value->getVec3());
+    if (name) JS_FreeCString(context, name);
+    return JS_UNDEFINED;
+}
+
 JSValue JsLayerGetScale(JSContext* context, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) return CreateJsVec3(context, 1.0, 1.0, 1.0);
     auto* bridge = GetBridgeState(context);
@@ -1935,7 +1995,7 @@ JSValue JsLayerCreate(JSContext* context, JSValueConst, int argc, JSValueConst* 
     if (bridge == nullptr || bridge->runtime == nullptr) return JS_NewString(context, "");
 
     uint32_t create_slot = std::numeric_limits<uint32_t>::max();
-    if (bridge->cache_created_layers) {
+    if (bridge->cache_created_layers && (argc < 3 || JS_ToBool(context, argv[2]))) {
         create_slot =
             (bridge->update_scope_id << 16U) | (bridge->create_layer_slot++ & 0xffffU);
     }
@@ -2204,6 +2264,8 @@ JSValue BuildCursorEventObject(JSContext* context, const ScriptHostContext& host
         context, event, "normalizedPosition", CreateCursorPositionObject(context, host_context));
     JS_SetPropertyStr(context, event, "worldPosition", JS_DupValue(context, world_position));
     JS_SetPropertyStr(context, event, "position", world_position);
+    JS_SetPropertyStr(context, event, "screenPosition",
+                      CreateCursorScreenPositionObject(context, host_context));
     return event;
 }
 
@@ -2297,8 +2359,8 @@ std::string BuildPropertyScriptFactorySource(const ScriptFrontEndResult& front_e
             << "  var __props = globalThis[__scriptContext.propsName];\n";
     AppendScriptPropertiesBuilder(wrapper);
     wrapper << "  const thisScene = Object.create(globalThis.scene);\n"
-            << "  thisScene.createLayer = function(sourcePath) { return "
-               "globalThis.scene.__createLayerFor(__scriptContext.layerName, sourcePath); };\n"
+            << "  Object.defineProperty(thisScene, 'createLayer', { value: function(sourcePath) { return "
+               "globalThis.scene.__createLayerFor(__scriptContext.layerName, sourcePath); } });\n"
             << "  let thisLayer = __scriptContext.layerName ? "
                "globalThis.scene.getLayer(__scriptContext.layerName) : undefined;\n"
             << "  let thisObject = thisLayer;\n"
@@ -2339,8 +2401,8 @@ std::string BuildSceneScriptFactorySource(const ScriptFrontEndResult& front_end)
             << "  var __props = globalThis.__scriptProps || {};\n";
     AppendScriptPropertiesBuilder(wrapper);
     wrapper << "  const thisScene = Object.create(globalThis.scene);\n"
-            << "  thisScene.createLayer = function(sourcePath) { return "
-               "globalThis.scene.__createLayerFor(__scriptContext.layerName, sourcePath); };\n"
+            << "  Object.defineProperty(thisScene, 'createLayer', { value: function(sourcePath) { return "
+               "globalThis.scene.__createLayerFor(__scriptContext.layerName, sourcePath); } });\n"
             << "  let thisLayer = __scriptContext.layerName ? "
                "globalThis.scene.getLayer(__scriptContext.layerName) : undefined;\n"
             << "  let thisObject = thisLayer;\n"
@@ -2443,7 +2505,11 @@ bool EnsureSharedHostBindings(JSContext* context, SceneRuntimeContext* runtime,
         JS_SetPropertyStr(context,
                           global_object,
                           "__layerCreate",
-                          JS_NewCFunction(context, JsLayerCreate, "__layerCreate", 2));
+                          JS_NewCFunction(context, JsLayerCreate, "__layerCreate", 3));
+        JS_SetPropertyStr(context, global_object, "__layerSetAlpha",
+                          JS_NewCFunction(context, JsLayerSetAlpha, "__layerSetAlpha", 2));
+        JS_SetPropertyStr(context, global_object, "__layerSetColor",
+                          JS_NewCFunction(context, JsLayerSetColor, "__layerSetColor", 2));
         JS_SetPropertyStr(context,
                           global_object,
                           "__layerGetIndex",

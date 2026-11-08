@@ -246,6 +246,9 @@ static void AddCustomShaderGraphPass(
             pdesc.submesh_index   = submesh_index;
             pdesc.material_slot   = material_slot;
             CheckAndSetSprite(scene, pdesc, material.textures);
+            const bool exports_composite =
+                IsResolvedImageEffectFinalNode(scene, node, visibility_node) &&
+                scene.cameras.at(visibility_node->Camera())->GetImgEffect()->ExportsComposite();
             for (usize i = 0; i < material.textures.size(); i++) {
                 const auto& texture_name = material.textures[i];
                 const auto  url = IsSpecTex(texture_name)
@@ -279,6 +282,9 @@ static void AddCustomShaderGraphPass(
                 }
                 builder.read(input);
                 pdesc.textures.emplace_back(input->key());
+                if (exports_composite && i == 0) {
+                    extra.id_link_map[(usize)imgId] = input;
+                }
             }
 
             rg::TexNode* output_node { nullptr };
@@ -288,7 +294,7 @@ static void AddCustomShaderGraphPass(
                                                           .type = rg::TexNode::TexType::Temp },
                                       true);
             builder.write(output_node);
-            if (resolved_output == SpecTex_Default) {
+            if (resolved_output == SpecTex_Default && !exports_composite) {
                 extra.id_link_map[(usize)imgId] = output_node;
             } else if (register_base_link_output) {
                 extra.id_base_output_link_map[(usize)imgId] = output_node;
@@ -341,7 +347,10 @@ static void ToGraphPass(
     }
 
     std::string camera_override;
-    if (mode == GraphPassMode::BaseOnly && IsComposeEffectNode(scene, node)) {
+    const auto* base_material = mesh->MaterialForSlot(0);
+    const bool captures_background = base_material != nullptr &&
+        base_material->name == "composelayer";
+    if (captures_background || (mode == GraphPassMode::BaseOnly && IsComposeEffectNode(scene, node))) {
         camera_override = ActiveCameraName(scene);
     }
     const bool route_effect_final_to_compose =

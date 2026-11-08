@@ -270,6 +270,18 @@ gtest_discover_tests(
     PROPERTIES TIMEOUT 30
     DISCOVERY_TIMEOUT 60
 )
+add_executable(vulkan_texture_transfer_smoke vulkan_texture_transfer_smoke.cpp)
+target_include_directories(vulkan_texture_transfer_smoke PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Vulkan/include
+    ${CMAKE_SOURCE_DIR}/src/Scene/VulkanRender/include
+    ${CMAKE_SOURCE_DIR}/src/Utils/include
+)
+target_link_libraries(vulkan_texture_transfer_smoke PRIVATE Vulkan::Vulkan)
+target_compile_features(vulkan_texture_transfer_smoke PRIVATE cxx_std_20)
+target_compile_options(vulkan_texture_transfer_smoke PRIVATE -UNDEBUG)
+add_test(NAME vulkan_texture_transfer_smoke COMMAND vulkan_texture_transfer_smoke)
+
 add_executable(vulkan_render_batch_planner_smoke vulkan_render_batch_planner_smoke.cpp)
 target_link_libraries(vulkan_render_batch_planner_smoke PRIVATE wpVulkanRender)
 target_include_directories(vulkan_render_batch_planner_smoke PRIVATE .)
@@ -290,9 +302,10 @@ target_include_directories(vulkan_sample_count_smoke PRIVATE
 target_compile_features(vulkan_sample_count_smoke PRIVATE cxx_std_20)
 add_test(NAME vulkan_sample_count_smoke COMMAND vulkan_sample_count_smoke)
 add_executable(rendergraph_smoke rendergraph_smoke.cpp)
-target_link_libraries(rendergraph_smoke PRIVATE ${PROJECT_NAME} wpVulkanRender wpVulkan wpRGraph wpScene wpAudio wpFs)
+target_link_libraries(rendergraph_smoke PRIVATE ${PROJECT_NAME} wpVulkanRender wpVulkan wpRGraph wpScene wpAudio wpFs nlohmann_json::nlohmann_json)
 target_include_directories(rendergraph_smoke PRIVATE . ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Scene/VulkanRender)
 target_compile_features(rendergraph_smoke PRIVATE cxx_std_20)
+target_compile_options(rendergraph_smoke PRIVATE -UNDEBUG)
 add_test(NAME rendergraph_smoke COMMAND rendergraph_smoke)
 add_executable(timer_tests timer/frame_timer_test.cpp)
 target_link_libraries(timer_tests PRIVATE wpTimer GTest::gtest_main)

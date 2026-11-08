@@ -68,6 +68,11 @@ void WPShaderValueUpdater::InitUniforms(SceneNode* pNode, const ExistsUniformOp&
     InitUniforms(pNode, 0, existsOp);
 }
 
+void WPShaderValueUpdater::SetScreenSize(i32 width, i32 height) {
+    m_screen_size = { float(width), float(height) };
+    if (m_scene && m_scene->runtime) m_scene->runtime->SetScreenSize(width, height);
+}
+
 void WPShaderValueUpdater::InitUniforms(SceneNode* pNode, uint32_t material_slot,
                                         const ExistsUniformOp& existsOp) {
     m_nodeUniformInfoMap[pNode][material_slot] = WPUniformInfo();
@@ -81,6 +86,8 @@ void WPShaderValueUpdater::InitUniforms(SceneNode* pNode, uint32_t material_slot
     info.has_ETVPI              = existsOp(G_ETVPI);
 
     info.has_VP = existsOp(G_VP);
+    info.has_normal_model = existsOp("g_NormalModelMatrix");
+    info.has_eye = existsOp("g_EyePosition");
 
     info.has_BONES            = existsOp(G_BONES);
     info.has_TIME             = existsOp(G_TIME);
@@ -183,6 +190,20 @@ void WPShaderValueUpdater::UpdateUniforms(SceneNode* pNode, uint32_t material_sl
     bool reqETVPI = info.has_ETVPI;
 
     Matrix4d viewProTrans = camera->GetViewProjectionMatrix();
+
+    if (info.has_eye) {
+        const Vector3f eye = camera->GetPosition().cast<float>();
+        updateOp("g_EyePosition", ShaderValue(eye.data(), 3));
+    }
+    if (info.has_normal_model) {
+        // std140 mat3 columns each occupy a vec4 slot.
+        const Matrix3f normal = pNode->RenderTrans().topLeftCorner<3, 3>()
+                                    .inverse().transpose().cast<float>();
+        std::array<float, 12> packed {};
+        for (int column = 0; column < 3; ++column)
+            for (int row = 0; row < 3; ++row) packed[column * 4 + row] = normal(row, column);
+        updateOp("g_NormalModelMatrix", packed);
+    }
 
     if (info.has_VP) {
         updateOp(G_VP, ShaderValue::fromMatrix(viewProTrans));
@@ -307,8 +328,10 @@ void WPShaderValueUpdater::UpdateUniforms(SceneNode* pNode, uint32_t material_sl
         for (auto& l : m_scene->lights) {
             if (i == 4) break;
             assert(l->node() != nullptr);
-            const auto& trans = l->node()->Translate();
-            std::copy(trans.begin(), trans.end(), lights.begin() + i * 4);
+            if (! l->node()->EffectiveVisible()) continue;
+            l->node()->UpdateTrans();
+            const Vector3f trans = l->node()->ModelTrans().topRightCorner<3, 1>().cast<float>();
+            std::copy(trans.data(), trans.data() + 3, lights.begin() + i * 4);
             if (i < 3) {
                 const auto& color = l->premultipliedColor();
                 std::copy(color.begin(), color.end(), lights_color.begin() + i * 4);

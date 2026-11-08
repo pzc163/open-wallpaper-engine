@@ -48,6 +48,8 @@ struct WPMdl {
         std::vector<std::array<float, 2>>    texcoords;
         std::vector<std::array<float, 2>>    texcoord2;
         std::vector<std::array<uint16_t, 3>> indices;
+        std::vector<std::array<uint32_t, 3>> indices32;
+        std::size_t TriangleCount() const { return indices.size() + indices32.size(); }
 
         struct Part {
             uint32_t id { 0 };

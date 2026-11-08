@@ -557,7 +557,7 @@ private:
     }
 
     void rebuildRenderGraph() {
-        if (m_scene == nullptr) return;
+        if (m_scene == nullptr || !m_surface_ready) return;
 
         if (m_rg) m_render->clearLastRenderGraph();
         m_rg = sceneToRenderGraph(*m_scene);
@@ -607,6 +607,9 @@ private:
         }
     }
     MHANDLER_CMD(DRAW) {
+        // Stopping the timer does not remove DRAW messages already queued.
+        // Surface reconfiguration releases presentation passes until FINISH.
+        if (!m_surface_ready) return;
         frame_timer.FrameBegin();
         if (m_rg) {
             const double frame_time = frame_timer.IdeaTime() * m_speed;
@@ -746,7 +749,8 @@ private:
     MHANDLER_CMD(INIT_VULKAN) {
         std::shared_ptr<RenderInitInfo> info;
         if (msg->findObject("info", &info)) {
-            m_render->init(*info);
+            m_surface_ready = m_render->init(*info);
+            if (!m_surface_ready) return;
             m_render->SetWallpaperScalingMode(m_scalingmode);
             m_render->SetWallpaperScalingFactor(m_scalingfactor);
             m_render->SetWallpaperHorizontalFlip(m_horizontal_flip);
@@ -763,6 +767,7 @@ private:
             return;
         }
         try {
+            m_surface_ready = false;
             frame_timer.Stop();
             if (renderInited()) {
                 m_render->SetVideoPlaybackPaused(true);
@@ -785,6 +790,7 @@ private:
         }
         try {
             bool ok = m_render->resetSurface(*info);
+            m_surface_ready = ok;
             if (ok) {
                 rebuildRenderGraph();
                 m_render->SetVideoPlaybackPaused(false);
@@ -802,6 +808,7 @@ public:
 
 private:
     std::shared_ptr<Scene> m_scene { nullptr };
+    bool                   m_surface_ready { false };
     float                  m_speed { 1.0f };
 
     std::unique_ptr<vulkan::VulkanRender> m_render;

@@ -44,7 +44,10 @@ void SceneCamera::CalculateViewProjectionMatrix() {
 	};
 
 	if(m_perspective) {
-		m_viewProjectionMat = Perspective(Radians(m_fov), m_aspect, m_nearClip, m_farClip) * m_viewMat;
+		auto projection = Perspective(Radians(m_fov), m_aspect, m_nearClip, m_farClip);
+		// Keep precision at astronomical distances with a floating-point depth buffer.
+		if (m_reversedDepth) projection.row(2) = (projection.row(3) - projection.row(2)).eval();
+		m_viewProjectionMat = projection * m_viewMat;
 	} else {
 		double left = -m_width/2.0f;
 		double right = m_width/2.0f;

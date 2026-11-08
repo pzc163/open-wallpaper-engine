@@ -222,6 +222,8 @@ bool WPImageObject::FromJson(const nlohmann::json& json, fs::VFS& vfs) {
 		}
     }
     GET_JSON_NAME_VALUE_NOWARN(jImage, "nopadding", nopadding);
+    if (json.contains("color")) color_setting = json.at("color");
+    if (json.contains("brightness")) brightness_setting = json.at("brightness");
     GET_JSON_NAME_VALUE_NOWARN(json, "color", color);
     if (json.contains("alpha")) {
         alpha_setting = json.at("alpha");

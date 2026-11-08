@@ -97,6 +97,8 @@ public:
     nlohmann::json             angles_setting;
     nlohmann::json             visible_setting;
     nlohmann::json             alpha_setting;
+    nlohmann::json             color_setting;
+    nlohmann::json             brightness_setting;
     WPMaterial                 material;
     std::vector<WPImageEffect> effects;
     Config                     config;

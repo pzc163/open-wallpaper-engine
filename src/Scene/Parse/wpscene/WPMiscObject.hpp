@@ -108,6 +108,9 @@ struct WPMiscObjectBase {
 };
 
 struct WPTextObject : WPMiscObjectBase {
+    nlohmann::json       alpha_setting;
+    nlohmann::json       color_setting;
+    nlohmann::json       brightness_setting;
     nlohmann::json       text;
     nlohmann::json       font;
     float                pointsize { 12.0f };
@@ -150,6 +153,9 @@ struct WPTextObject : WPMiscObjectBase {
         GET_JSON_NAME_VALUE_NOWARN(json, "limitrows", limitrows);
         GET_JSON_NAME_VALUE_NOWARN(json, "limitwidth", limitwidth);
         GET_JSON_NAME_VALUE_NOWARN(json, "limituseellipsis", limituseellipsis);
+        if (json.contains("alpha")) alpha_setting = json.at("alpha");
+        if (json.contains("color")) color_setting = json.at("color");
+        if (json.contains("brightness")) brightness_setting = json.at("brightness");
         GET_JSON_NAME_VALUE_NOWARN(json, "color", color);
         GET_JSON_NAME_VALUE_NOWARN(json, "alpha", alpha);
         GET_JSON_NAME_VALUE_NOWARN(json, "brightness", brightness);

@@ -15,7 +15,8 @@ class SceneIndexArray : NoCopy {
 
 public:
     SceneIndexArray(usize indexCount);
-    SceneIndexArray(std::span<const uint32_t> data);
+    SceneIndexArray(std::span<const uint32_t> data, bool wide_indices = false);
+    bool WideIndices() const { return m_wide_indices; }
 
     SceneIndexArray(SceneIndexArray&&) noexcept;
     ~SceneIndexArray();
@@ -56,5 +57,6 @@ private:
     usize m_render_size { std::numeric_limits<usize>::max() };
 
     uint32_t m_id;
+    bool m_wide_indices { false };
 };
 } // namespace wallpaper

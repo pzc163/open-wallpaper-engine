@@ -47,6 +47,10 @@ public:
     SceneNode*  ResolvedFinalRenderNode() const { return m_resolved_final_render_node; }
     void        SetFinalMeshDynamic(bool dynamic);
     void        SetFinalBlend(BlendMode m) { m_final_blend = m; }
+    void        SetExportsComposite(bool enabled) { m_exports_composite = enabled; }
+    bool        ExportsComposite() const { return m_exports_composite; }
+    void        SetFullscreen(bool enabled) { fullscreen = enabled; }
+    bool        Fullscreen() const { return fullscreen; }
 
     void ResolveEffect(const SceneMesh& defualt_mesh, std::string_view effect_cam);
 
@@ -56,6 +60,7 @@ private:
     std::string m_pingpong_b;
 
     bool fullscreen { false };
+    bool m_exports_composite { false };
     //    std::vector<float> m_size;
     std::unique_ptr<SceneMesh> m_final_mesh;
     std::unique_ptr<SceneNode> m_final_node;

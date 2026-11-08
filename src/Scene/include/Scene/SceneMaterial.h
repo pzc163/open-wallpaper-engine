@@ -30,5 +30,9 @@ public:
 
     SceneMaterialCustomShader customShader;
     BlendMode                 blenmode { BlendMode::Disable };
+    bool                      depth_test { false };
+    bool                      depth_write { false };
+    enum class CullMode { None, Back, Front };
+    CullMode                  cull_mode { CullMode::None };
 };
 } // namespace wallpaper

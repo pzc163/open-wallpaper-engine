@@ -2,6 +2,7 @@
 #include "Core/NoCopyMove.hpp"
 #include "Vulkan/StagingBuffer.hpp"
 #include <memory>
+#include <unordered_set>
 
 namespace wallpaper
 {
@@ -10,6 +11,7 @@ namespace vulkan
 
 struct RenderingResources {
     vvk::CommandBuffer command;
+    std::unordered_set<VkImage> cleared_depth_images;
 
     vvk::Semaphore sem_swap_wait_image;
     vvk::Semaphore sem_swap_finish;

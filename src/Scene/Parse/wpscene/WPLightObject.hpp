@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 #include <vector>
 #include "WPPuppet.hpp"
+#include "WPMiscObject.hpp"
 
 namespace wallpaper
 {
@@ -14,22 +15,13 @@ class VFS;
 namespace wpscene
 {
 
-class WPLightObject {
+class WPLightObject : public WPMiscObjectBase {
 public:
     bool                 FromJson(const nlohmann::json&, fs::VFS&);
-    int32_t              id { 0 };
-    std::string          name;
-    std::array<float, 3> origin { 0.0f, 0.0f, 0.0f };
-    std::array<float, 3> scale { 1.0f, 1.0f, 1.0f };
-    std::array<float, 3> angles { 0.0f, 0.0f, 0.0f };
-    std::array<float, 2> parallaxDepth { 0.0f, 0.0f };
     std::array<float, 3> color { 1.0f, 1.0f, 1.0f };
     std::string          light;
     float                radius { 1000.0f };
     float                intensity { 1.0f };
-    bool                 visible { true };
-    std::vector<int32_t> dependencies;
-    nlohmann::json       field_bindings;
 };
 
 } // namespace wpscene

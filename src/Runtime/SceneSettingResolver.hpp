@@ -25,6 +25,11 @@ std::unique_ptr<DynamicValue> ResolveBoolSetting(
     const nlohmann::json& value,
     std::string_view current_layer_name = {},
     bool allow_script_update = true);
+std::unique_ptr<DynamicValue> ResolveFloatSetting(
+    SceneRuntimeContext& context,
+    const nlohmann::json& value,
+    std::string_view current_layer_name = {},
+    bool allow_script_update = true);
 std::unique_ptr<DynamicValue> ResolveVec3Setting(
     SceneRuntimeContext& context,
     const nlohmann::json& value,

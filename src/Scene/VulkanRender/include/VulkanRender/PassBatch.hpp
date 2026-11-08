@@ -20,6 +20,8 @@ struct CustomPassRenderInfo {
     VkImageView        view {};
     VkImage            msaa_image {};
     VkImageView        msaa_view {};
+    VkImage            depth_image {};
+    VkImageView        depth_view {};
     VkExtent3D         extent {};
     VkImageLayout      final_layout { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
     VkAttachmentLoadOp load_op { VK_ATTACHMENT_LOAD_OP_DONT_CARE };
@@ -85,7 +87,7 @@ CustomPassBeginRenderPassClearValueCount(const CustomPassRenderInfo& render) {
 }
 
 struct CustomPassFramebufferAttachmentViewList {
-    std::array<VkImageView, 2> views {};
+    std::array<VkImageView, 3> views {};
     uint32_t                   count { 0 };
 
     uint32_t size() const { return count; }
@@ -96,20 +98,23 @@ struct CustomPassFramebufferAttachmentViewList {
 inline CustomPassFramebufferAttachmentViewList
 CustomPassFramebufferAttachmentViews(const CustomPassRenderInfo& render) {
     const auto plan = PlanCustomPassMsaaAttachments(render.sample_count);
-    return CustomPassFramebufferAttachmentViewList {
+    auto result = CustomPassFramebufferAttachmentViewList {
         .views = {
             plan.needs_resolve_attachment ? render.msaa_view : render.view,
             render.view,
         },
         .count = plan.attachment_count,
     };
+    if (render.depth_view != VK_NULL_HANDLE) result.views[result.count++] = render.depth_view;
+    return result;
 }
 
 inline bool CompatibleCustomPassAttachments(const CustomPassRenderInfo& a,
                                             const CustomPassRenderInfo& b) {
     if (a.image != b.image || a.view != b.view || a.extent.width != b.extent.width ||
         a.extent.height != b.extent.height || a.extent.depth != b.extent.depth ||
-        a.final_layout != b.final_layout || a.sample_count != b.sample_count) {
+        a.final_layout != b.final_layout || a.sample_count != b.sample_count ||
+        a.depth_image != b.depth_image || a.depth_view != b.depth_view) {
         return false;
     }
 

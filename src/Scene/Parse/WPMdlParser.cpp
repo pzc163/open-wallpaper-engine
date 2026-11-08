@@ -206,19 +206,34 @@ bool ParseMesh(fs::MemBinaryStream& f, const WPMdl::Header& header, WPMdl::Mesh&
 
     if (! HasRemaining(f, 4)) return false;
     const uint32_t indices_size = f.ReadUint32();
-    if (indices_size % kIndexTriangleBytes != 0) {
+    const bool wide_indices = vertex_num > 65535u;
+    const uint32_t triangle_bytes = wide_indices ? 12u : kIndexTriangleBytes;
+    if (indices_size % triangle_bytes != 0) {
         LOG_ERROR("unsupport mdl indices size %d in %s", indices_size, std::string(path).c_str());
         return false;
     }
-    const uint32_t index_count = indices_size / kIndexTriangleBytes;
+    const uint32_t index_count = indices_size / triangle_bytes;
     if (index_count > kMaxMdlTriangles || ! HasRemaining(f, indices_size)) {
         LOG_ERROR("mdlv%d index payload too large or truncated in %s",
                   header.mdlv, std::string(path).c_str());
         return false;
     }
-    mesh.indices.resize(index_count);
-    for (auto& id : mesh.indices) {
-        for (auto& v : id) v = f.ReadUint16();
+    if (wide_indices) {
+        mesh.indices32.resize(index_count);
+        for (auto& triangle : mesh.indices32) {
+            for (auto& index : triangle) {
+                index = f.ReadUint32();
+                if (index >= vertex_num) return false;
+            }
+        }
+    } else {
+        mesh.indices.resize(index_count);
+        for (auto& triangle : mesh.indices) {
+            for (auto& index : triangle) {
+                index = f.ReadUint16();
+                if (index >= vertex_num) return false;
+            }
+        }
     }
 
     if (header.mdlv >= 21) {
@@ -1037,7 +1052,7 @@ std::vector<SceneMesh::DrawRange> DrawNothingRange() {
 
 std::vector<SceneMesh::DrawRange> DrawRangesFromParts(const WPMdl::Mesh& mdl_mesh) {
     std::vector<SceneMesh::DrawRange> ranges;
-    const uint32_t index_count = static_cast<uint32_t>(mdl_mesh.indices.size() * 3u);
+    const uint32_t index_count = static_cast<uint32_t>(mdl_mesh.TriangleCount() * 3u);
     ranges.reserve(mdl_mesh.parts.size());
     for (const auto& part : mdl_mesh.parts) {
         TryAppendDrawRange(ranges, part, index_count);
@@ -1049,7 +1064,7 @@ std::vector<SceneMesh::DrawRange> DrawRangesFromParts(const WPMdl::Mesh& mdl_mes
 std::vector<SceneMesh::DrawRange>
 DrawRangesFromPartIndices(const WPMdl::Mesh& mdl_mesh, std::span<const uint32_t> part_indices) {
     std::vector<SceneMesh::DrawRange> ranges;
-    const uint32_t index_count = static_cast<uint32_t>(mdl_mesh.indices.size() * 3u);
+    const uint32_t index_count = static_cast<uint32_t>(mdl_mesh.TriangleCount() * 3u);
     ranges.reserve(part_indices.size());
     for (const uint32_t part_index : part_indices) {
         if (part_index >= mdl_mesh.parts.size()) continue;
@@ -1071,7 +1086,7 @@ DrawRangesExcludingPartIndices(const WPMdl::Mesh& mdl_mesh,
     }
 
     std::vector<SceneMesh::DrawRange> ranges;
-    const uint32_t index_count = static_cast<uint32_t>(mdl_mesh.indices.size() * 3u);
+    const uint32_t index_count = static_cast<uint32_t>(mdl_mesh.TriangleCount() * 3u);
     ranges.reserve(mdl_mesh.parts.size());
     for (std::size_t i = 0; i < mdl_mesh.parts.size(); ++i) {
         if (excluded[i]) continue;
@@ -1121,7 +1136,11 @@ bool WPMdlParser::Parse(std::string_view path, fs::VFS& vfs, WPMdl& mdl) {
 
     bool alt_mdl_format = false;
 
-    if (mdl.mdlv >= 21) {
+    // Static MDLV15-20 models already use the flagged vertex layout. The
+    // legacy puppet adapter below is only for the older skinned payloads.
+    const bool static_flagged_mesh = mdl.mdlv >= 15 &&
+        (mdl.mdl_header.mdl_flag & (MDL_FLAG_SKIN_BLEND | MDL_FLAG_SKIN_WEIGHT)) == 0;
+    if (mdl.mdlv >= 21 || static_flagged_mesh) {
         if (mdl.mdl_header.mesh_count == 0 || mdl.mdl_header.mesh_count > kMaxMdlMeshes) {
             LOG_ERROR("unsupported mdl mesh count %d in %s",
                       mdl.mdl_header.mesh_count, str_path.c_str());
@@ -1259,6 +1278,19 @@ void WPMdlParser::GenMeshFromMdl(SceneMesh::Submesh& submesh, const WPMdl::Mesh&
         std::memcpy(dst, src.positions[index].data(), sizeof(src.positions[index]));
     });
 
+    if (src.normals.size() == src.positions.size()) {
+        attrs.push_back({ "a_Normal", VertexType::FLOAT3 });
+        packers.push_back([&src](std::size_t index, float* dst) {
+            std::memcpy(dst, src.normals[index].data(), sizeof(src.normals[index]));
+        });
+    }
+    if (src.tangents.size() == src.positions.size()) {
+        attrs.push_back({ "a_Tangent4", VertexType::FLOAT4 });
+        packers.push_back([&src](std::size_t index, float* dst) {
+            std::memcpy(dst, src.tangents[index].data(), sizeof(src.tangents[index]));
+        });
+    }
+
     if (! src.blend_indices.empty()) {
         attrs.push_back({ WE_IN_BLENDINDICES.data(), VertexType::UINT4 });
         packers.push_back([&src](std::size_t index, float* dst) {
@@ -1303,7 +1335,15 @@ void WPMdlParser::GenMeshFromMdl(SceneMesh::Submesh& submesh, const WPMdl::Mesh&
     }
 
     submesh.AddVertexArray(std::move(vertex));
-    submesh.AddIndexArray(MakePuppetIndexArray(src.indices));
+    if (! src.indices32.empty()) {
+        std::vector<uint32_t> indices;
+        indices.reserve(src.indices32.size() * 3);
+        for (const auto& triangle : src.indices32)
+            indices.insert(indices.end(), triangle.begin(), triangle.end());
+        submesh.AddIndexArray(SceneIndexArray(indices, true));
+    } else {
+        submesh.AddIndexArray(MakePuppetIndexArray(src.indices));
+    }
 
     if (! src.parts.empty()) {
         submesh.SetDrawRanges(DrawRangesFromParts(src));

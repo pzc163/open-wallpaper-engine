@@ -4,6 +4,8 @@
 #include "SpecTexs.hpp"
 #include "Core/StringHelper.hpp"
 
+#include <cassert>
+
 using namespace wallpaper;
 
 SceneImageEffectLayer::SceneImageEffectLayer(SceneNode* node, float w, float h,
@@ -35,6 +37,7 @@ void SceneImageEffectLayer::ResolveEffect(const SceneMesh& default_mesh,
 
     SceneImageEffectNode* last_output { nullptr };
     for (auto& eff : m_effects) {
+        bool writes_pingpong = false;
         for (auto& cmd : eff->commands) {
             if (sstart_with(cmd.src, WE_EFFECT_PPONG_PREFIX_A)) cmd.src = ppong_a;
 
@@ -45,6 +48,7 @@ void SceneImageEffectLayer::ResolveEffect(const SceneMesh& default_mesh,
                 it->output == SpecTex_Default) {
                 it->output  = ppong_b;
                 last_output = &(*it);
+                writes_pingpong = true;
             }
 
             assert(it->sceneNode->HasMaterial());
@@ -66,7 +70,8 @@ void SceneImageEffectLayer::ResolveEffect(const SceneMesh& default_mesh,
                 },
                 ppong_a);
         }
-        swap_pp();
+        // Missing or auxiliary-only effects leave the previous image intact.
+        if (writes_pingpong) swap_pp();
     }
     if (last_output != nullptr) {
         last_output->output = SpecTex_Default;
@@ -83,9 +88,18 @@ void SceneImageEffectLayer::ResolveEffect(const SceneMesh& default_mesh,
         auto& material      = *mesh.Material();
         {
             material.blenmode = m_final_blend;
-            last_output->sceneNode->SetCamera(std::string());
-            last_output->sceneNode->CopyTrans(*m_final_node);
-            mesh.ChangeMeshDataFrom(*m_final_mesh);
+            if (fullscreen) {
+                // Screen-space effects cover the output independently of the
+                // scene's perspective camera and the owner's pixel origin.
+                last_output->sceneNode->SetCamera(std::string(effect_cam));
+                last_output->sceneNode->CopyTrans(default_node);
+                last_output->sceneNode->SetRenderTransformOverride(Eigen::Matrix4d::Identity());
+                mesh.ChangeMeshDataFrom(default_mesh);
+            } else {
+                last_output->sceneNode->SetCamera(std::string());
+                last_output->sceneNode->CopyTrans(*m_final_node);
+                mesh.ChangeMeshDataFrom(*m_final_mesh);
+            }
         }
     }
 }

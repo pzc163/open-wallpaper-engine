@@ -1127,6 +1127,43 @@ TEST(SceneSchema, AbsorbsTextModelAndCameraObjectKinds) {
     EXPECT_TRUE(camera.disablepropagation);
 }
 
+TEST(SceneSchema, ParserConnectsImageAndTextAppearanceScriptsAndRetainsHiddenTemplates) {
+    fs::VFS vfs;
+    MountSceneFiles(vfs);
+    audio::SoundManager sound_manager;
+    auto scene = nlohmann::json::parse(BasicPuppetSceneJson());
+    const auto fade = nlohmann::json {
+        {"value", 1.0}, {"script", "export function update(value) { return Math.max(0, 1 - engine.runtime); }"}
+    };
+    scene["objects"] = nlohmann::json::array({
+        {{"id", 1}, {"name", "hidden template"}, {"image", "image.json"}, {"visible", false}},
+        {{"id", 2}, {"name", "fade image"}, {"image", "image.json"}, {"alpha", fade}},
+        {{"id", 3}, {"name", "fade text"}, {"text", "Loading"}, {"font", "Arial"}, {"alpha", fade}},
+        {{"id", 4}, {"name", "controller"}, {"solid", true},
+         {"visible", {{"value", true}, {"script", "export function update(value) { if (!shared.point) shared.point = thisScene.createLayer({image:'image.json',alpha:0.4}); return value; }"}}}}
+    });
+    ProjectProperties properties;
+    SceneParseRequest request { .scene_id = "dynamic-appearance", .project_properties = &properties };
+    auto parsed = WPSceneParser().Parse(request, scene.dump(), vfs, sound_manager);
+    ASSERT_NE(parsed, nullptr);
+    auto* image = FindFirstChildByName(*parsed->sceneGraph, "fade image");
+    auto* text = FindFirstChildByName(*parsed->sceneGraph, "fade text");
+    auto* hidden = FindFirstChildByName(*parsed->sceneGraph, "hidden template");
+    ASSERT_NE(image, nullptr); ASSERT_NE(text, nullptr); ASSERT_NE(hidden, nullptr);
+    EXPECT_FALSE(hidden->Visible());
+    ASSERT_NE(image->Mesh()->Material(), nullptr);
+    ASSERT_NE(text->Mesh()->Material(), nullptr);
+    parsed->runtime->Tick(0.5);
+    EXPECT_FLOAT_EQ(image->Mesh()->Material()->customShader.constValues.at("g_Alpha")[0], 0.5f);
+    EXPECT_FLOAT_EQ(text->Mesh()->Material()->customShader.constValues.at("g_Alpha")[0], 0.5f);
+    ASSERT_TRUE(parsed->runtime->NodeTextState("fade text").has_value());
+    EXPECT_FLOAT_EQ(parsed->runtime->NodeTextState("fade text")->alpha, 1);
+    parsed->runtime->Tick(1.0);
+    EXPECT_FLOAT_EQ(image->Mesh()->Material()->customShader.constValues.at("g_Alpha")[0], 0);
+    EXPECT_FLOAT_EQ(text->Mesh()->Material()->customShader.constValues.at("g_Alpha")[0], 0);
+    EXPECT_EQ(parsed->runtime->scriptErrorCount(), 0u);
+}
+
 TEST(SceneSchema, ParserCreatesTextChildWithoutBreakingLayerParents) {
     fs::VFS vfs;
     MountSceneFiles(vfs);
@@ -1419,6 +1456,25 @@ TEST(SceneSchema, CameraViewGetterUpdatesAfterParentTransformChange) {
     parent->SetTranslate({ 12.0f, 0.0f, 0.0f });
     const auto updated_view = camera.GetViewMatrix();
     EXPECT_NEAR(updated_view(0, 3), -12.0, 1.0e-5);
+}
+
+TEST(SceneSchema, PerspectiveCameraPreservesNearAndFarDepthPrecision) {
+    SceneCamera camera(16.0f / 9.0f, 0.01f, 10000.0f, 50.0f);
+    camera.SetReversedDepth(true);
+    const auto projection = camera.GetViewProjectionMatrix();
+    const auto depth = [&](double distance) {
+        const Eigen::Vector4d clip = projection * Eigen::Vector4d(0, 0, -distance, 1);
+        return clip.z() / clip.w();
+    };
+    EXPECT_NEAR(depth(camera.NearClip()), 1.0, 1e-10);
+    EXPECT_NEAR(depth(camera.FarClip()), 0.0, 1e-10);
+    EXPECT_GT(static_cast<float>(depth(3000)), static_cast<float>(depth(3000.01)));
+    SceneCamera clone(1, 1, 0.0f, 1.0f);
+    clone.Clone(camera);
+    EXPECT_TRUE(clone.IsPerspective());
+    EXPECT_TRUE(clone.ReversedDepth());
+    EXPECT_DOUBLE_EQ(clone.Fov(), 50.0);
+    EXPECT_TRUE(clone.GetViewProjectionMatrix().isApprox(projection));
 }
 
 TEST(SceneSchema, CameraViewMatrixUsesScaledModelTransformInverse) {
@@ -2288,6 +2344,52 @@ TEST(SceneSchema, ParserLoadsPuppetMeshMaterialSlotsFromPerMeshMaterialFiles) {
     ASSERT_EQ(mesh.MaterialForSlot(1)->textures.size(), 1u);
     EXPECT_EQ(mesh.MaterialForSlot(0)->textures[0], "head.tex");
     EXPECT_EQ(mesh.MaterialForSlot(1)->textures[0], "eyes.tex");
+}
+
+TEST(SceneSchema, ParserLoadsPerspectiveModelsAndCameraWithIndependentMaterialDepth) {
+    std::map<std::string, std::string> files;
+    AddPuppetImageSceneFiles(files, true, false, true);
+    for (const auto* path : {"/mat/head.json", "/mat/eyes.json"}) {
+        auto material = nlohmann::json::parse(files.at(path));
+        auto& pass = material["passes"][0];
+        pass["depthtest"] = "enabled";
+        pass["depthwrite"] = "enabled";
+        pass["cullmode"] = "normal";
+        pass["blending"] = std::string(path) == "/mat/head.json" ? "normal" : "translucent";
+        files[path] = material.dump();
+    }
+    auto source = nlohmann::json::parse(BasicPuppetSceneJson());
+    source["general"]["orthogonalprojection"] = nullptr;
+    source["general"]["nearz"] = 0.01;
+    source["general"]["farz"] = 10000;
+    source["objects"] = nlohmann::json::parse(R"([
+      {"id":10,"name":"model","model":"puppet.mdl","origin":[0,0,0]},
+      {"id":11,"name":"camera","camera":"default","fov":50,
+       "origin":[0,0,0.35],"scale":[0.01,0.01,0.01]}
+    ])");
+    fs::VFS vfs;
+    ASSERT_TRUE(vfs.Mount("/assets", std::make_unique<MemoryFs>(std::move(files))));
+    audio::SoundManager sound_manager;
+    ProjectProperties properties;
+    SceneParseRequest request { .scene_id = "perspective-model", .project_properties = &properties };
+    auto scene = WPSceneParser().Parse(request, source.dump(), vfs, sound_manager);
+    ASSERT_NE(scene, nullptr);
+    ASSERT_NE(scene->activeCamera, nullptr);
+    EXPECT_TRUE(scene->activeCamera->IsPerspective());
+    EXPECT_TRUE(scene->activeCamera->ReversedDepth());
+    EXPECT_DOUBLE_EQ(scene->activeCamera->Fov(), 50.0);
+    EXPECT_NEAR(scene->activeCamera->GetPosition().z(), 0.35, 1e-6);
+    EXPECT_NEAR(scene->activeCamera->GetViewMatrix()(2, 2), 1.0, 1e-6);
+    auto node = FindRootChildByName(*scene, "model");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->Mesh(), nullptr);
+    ASSERT_EQ(node->Mesh()->MaterialSlots().size(), 2u);
+    EXPECT_TRUE(node->Mesh()->MaterialForSlot(0)->depth_test);
+    EXPECT_TRUE(node->Mesh()->MaterialForSlot(0)->depth_write);
+    EXPECT_TRUE(node->Mesh()->MaterialForSlot(1)->depth_test);
+    EXPECT_FALSE(node->Mesh()->MaterialForSlot(1)->depth_write);
+    EXPECT_EQ(node->Mesh()->MaterialForSlot(0)->cull_mode, SceneMaterial::CullMode::Back);
+    EXPECT_EQ(scene->runtime->scriptErrorCount(), 0u);
 }
 
 TEST(SceneSchema, ParserKeepsMeshOnlyPuppetMaterialSlotsWithoutMdlsBlock) {

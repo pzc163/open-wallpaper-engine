@@ -417,7 +417,8 @@ inline std::optional<VmaImageParameters>
 CreateImage(const Device& device, VkExtent3D extent, u32 miplevel, VkFormat format,
             VkSamplerCreateInfo sampler_info, VkImageUsageFlags usage,
             VmaMemoryUsage         mem_usage = VMA_MEMORY_USAGE_GPU_ONLY,
-            VkSampleCountFlagBits  samples = VK_SAMPLE_COUNT_1_BIT) {
+            VkSampleCountFlagBits  samples = VK_SAMPLE_COUNT_1_BIT,
+            VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT) {
     VmaImageParameters image;
     do {
         if (samples != VK_SAMPLE_COUNT_1_BIT) {
@@ -425,7 +426,7 @@ CreateImage(const Device& device, VkExtent3D extent, u32 miplevel, VkFormat form
             constexpr VkImageUsageFlags removed_msaa_usage =
                 VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
             usage &= ~removed_msaa_usage;
-            usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+            if (aspect == VK_IMAGE_ASPECT_COLOR_BIT) usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         }
 
         VkImageCreateInfo info {
@@ -459,7 +460,7 @@ CreateImage(const Device& device, VkExtent3D extent, u32 miplevel, VkFormat form
                 .format   = format,
                 .subresourceRange =
                     VkImageSubresourceRange {
-                        .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+                        .aspectMask     = aspect,
                         .baseMipLevel   = 0,
                         .levelCount     = miplevel,
                         .baseArrayLayer = 0,
@@ -561,7 +562,8 @@ inline VkResult CopyImageData(std::span<const BufferParameters> in_bufs,
 } // namespace
 
 VkSampleCountFlagBits vulkan::PlannedTextureSampleCountForGpuAllocation(TextureKey key) {
-    if (key.usage != TexUsage::MSAA_COLOR) return VK_SAMPLE_COUNT_1_BIT;
+    if (key.usage != TexUsage::MSAA_COLOR && key.usage != TexUsage::DEPTH)
+        return VK_SAMPLE_COUNT_1_BIT;
     return key.sample_count;
 }
 
@@ -1170,7 +1172,8 @@ std::optional<VmaImageParameters> TextureCache::CreateTex(TextureKey tex_key) {
         const VkSampleCountFlagBits planned_samples =
             PlannedTextureSampleCountForGpuAllocation(tex_key);
         VkSamplerCreateInfo sam_info = GenSamplerInfo(tex_key);
-        VkFormat            format   = ToVkType(tex_key.format);
+        const bool is_depth = tex_key.usage == TexUsage::DEPTH;
+        VkFormat            format   = is_depth ? VK_FORMAT_D32_SFLOAT : ToVkType(tex_key.format);
         VkExtent3D          ext { (u32)tex_key.width, (u32)tex_key.height, 1 };
 
         if (auto opt =
@@ -1179,15 +1182,22 @@ std::optional<VmaImageParameters> TextureCache::CreateTex(TextureKey tex_key) {
                             tex_key.mipmap_level,
                             format,
                             sam_info,
-                            VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                                VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                            is_depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                                     : VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                                           VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
                             VMA_MEMORY_USAGE_GPU_ONLY,
-                            planned_samples);
+                            planned_samples,
+                            is_depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT);
             opt.has_value()) {
             image_paras = std::move(opt.value());
         } else
             break;
 
+        // The first depth draw each frame clears and transitions this attachment.
+        if (is_depth) {
+            image_paras.layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            return image_paras;
+        }
         const VkImageLayout final_layout = planned_samples == VK_SAMPLE_COUNT_1_BIT
                                                ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
                                                : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;

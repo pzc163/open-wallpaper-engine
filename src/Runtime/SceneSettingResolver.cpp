@@ -255,6 +255,16 @@ std::unique_ptr<DynamicValue> ResolveBoolSetting(
     return value;
 }
 
+std::unique_ptr<DynamicValue> ResolveFloatSetting(
+    SceneRuntimeContext& context, const nlohmann::json& setting,
+    std::string_view current_layer_name, bool allow_script_update) {
+    auto value = std::make_unique<DynamicValue>(parse_float(setting));
+    value = wrap_script_if_needed(context, setting, current_layer_name, std::move(value),
+                                  ScriptedValueSemantic::Generic, allow_script_update);
+    bind_user_property(context, setting, *value);
+    return value;
+}
+
 std::unique_ptr<DynamicValue> ResolveVec3Setting(
     SceneRuntimeContext& context,
     const nlohmann::json& setting,

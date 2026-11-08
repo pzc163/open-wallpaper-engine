@@ -69,6 +69,7 @@ public:
 
     ScriptEngine&            scriptEngine();
     const ScriptHostContext& hostContext() const;
+    void SetScreenSize(float width, float height);
     const ProjectProperties& defaultProjectProperties() const;
     const ProjectProperties& projectProperties() const;
     void          ApplyProjectPropertyOverride(const ProjectProperties& override_properties);
@@ -106,6 +107,10 @@ public:
                            bool apply_current_value = true);
     void RegisterMaterialConstant(std::shared_ptr<SceneMaterial> material, std::string name,
                                   std::unique_ptr<DynamicValue> value);
+    void RegisterMaterialAlpha(std::shared_ptr<SceneMaterial> material, std::unique_ptr<DynamicValue> value);
+    void RegisterMaterialColor(std::shared_ptr<SceneMaterial> material, std::unique_ptr<DynamicValue> value);
+    bool SetNodeAlpha(std::string_view name, float alpha);
+    bool SetNodeColor(std::string_view name, const Eigen::Vector3f& color);
     void RegisterSceneClearColor(std::unique_ptr<DynamicValue> value);
     void RegisterDynamicValueListener(std::unique_ptr<DynamicValue> value,
                                       std::function<void(const DynamicValue&)> callback);

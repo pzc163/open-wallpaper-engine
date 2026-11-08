@@ -319,6 +319,15 @@ void ApplyMaterialAlpha(SceneMaterial& material, float alpha) {
     values["g_Color4"] = color;
 }
 
+void ApplyMaterialColor(SceneMaterial& material, const Eigen::Vector3f& color) {
+    auto& values = material.customShader.constValues;
+    float alpha = 1.0f;
+    if (const auto it = values.find("g_Color4"); it != values.end() && it->second.size() == 4)
+        alpha = it->second[3];
+    values["g_Color"] = ShaderValue(color.data(), 3);
+    values["g_Color4"] = std::array<float, 4> {color.x(), color.y(), color.z(), alpha};
+}
+
 ShaderValue ShaderValueFromDynamicValue(const DynamicValue& value) {
     switch (value.getType()) {
     case DynamicValue::Vec4: return ShaderValue(value.getVec4().data(), 4);
@@ -381,7 +390,11 @@ bool AlignmentContains(std::string_view alignment, std::string_view part) {
 
 void SyncEffectFinalNode(SceneNode& source, SceneImageEffectLayer& layer) {
     source.UpdateTrans();
-    const auto sync_node = [&source](SceneNode& target) {
+    const auto sync_node = [&source, &layer](SceneNode& target) {
+        if (layer.Fullscreen()) {
+            target.SetRenderTransformOverride(Eigen::Matrix4d::Identity());
+            return;
+        }
         target.SetRenderTransformOverride(source.ModelTrans());
         target.SetTranslate(source.Translate());
         target.SetScale(source.Scale());
@@ -492,6 +505,9 @@ void SceneRuntimeContext::Tick(double frame_time) {
 ScriptEngine& SceneRuntimeContext::scriptEngine() { return *m_script_engine; }
 
 const ScriptHostContext& SceneRuntimeContext::hostContext() const { return *m_host_context; }
+void SceneRuntimeContext::SetScreenSize(float width, float height) {
+    m_host_context->screen_size = Eigen::Vector2f(width, height);
+}
 
 const ProjectProperties& SceneRuntimeContext::defaultProjectProperties() const {
     return m_default_project_properties;
@@ -599,19 +615,21 @@ void SceneRuntimeContext::EnqueueTextLayerPreparation(std::string name, const Te
         std::lock_guard lock { m_text_worker_mutex };
         if (m_queued_text_revisions[name] == state.cache_revision) return;
 
-        m_pending_text_jobs.erase(
-            std::remove_if(m_pending_text_jobs.begin(),
-                           m_pending_text_jobs.end(),
-                           [&name](const RuntimePendingTextLayerJob& job) {
-                               return job.name == name;
-                           }),
-            m_pending_text_jobs.end());
-        m_pending_text_jobs.push_back(RuntimePendingTextLayerJob {
-            .name     = name,
+        // Coalesce a busy layer in place so it cannot jump ahead of older
+        // requests (for example a once-per-minute clock next to frame counters).
+        RuntimePendingTextLayerJob job {
+            .name = name,
             .revision = state.cache_revision,
-            .state    = state,
-        });
-        m_pending_text_jobs.back().state.raster_size = layer.rasterSize();
+            .state = state,
+        };
+        job.state.raster_size = layer.rasterSize();
+        const auto pending = std::find_if(m_pending_text_jobs.begin(), m_pending_text_jobs.end(),
+                                         [&name](const auto& queued) { return queued.name == name; });
+        if (pending != m_pending_text_jobs.end()) {
+            *pending = std::move(job);
+        } else {
+            m_pending_text_jobs.push_back(std::move(job));
+        }
         m_queued_text_revisions[name] = state.cache_revision;
     }
     m_text_worker_cv.notify_one();
@@ -626,8 +644,8 @@ void SceneRuntimeContext::TextWorkerLoop() {
                 return m_stop_text_worker || ! m_pending_text_jobs.empty();
             });
             if (m_stop_text_worker) return;
-            job = std::move(m_pending_text_jobs.back());
-            m_pending_text_jobs.pop_back();
+            job = std::move(m_pending_text_jobs.front());
+            m_pending_text_jobs.erase(m_pending_text_jobs.begin());
         }
 
         auto prepared =
@@ -988,6 +1006,38 @@ void SceneRuntimeContext::RegisterSceneClearColor(std::unique_ptr<DynamicValue> 
         const auto vec = color.getVec3();
         m_scene->clearColor = { vec.x(), vec.y(), vec.z() };
     });
+}
+
+void SceneRuntimeContext::RegisterMaterialAlpha(std::shared_ptr<SceneMaterial> material,
+                                                std::unique_ptr<DynamicValue> value) {
+    RegisterDynamicValueListener(std::move(value),
+        [weak = std::weak_ptr<SceneMaterial>(material)](const DynamicValue& v) {
+            if (auto m = weak.lock()) ApplyMaterialAlpha(*m, v.getFloat());
+        });
+}
+
+void SceneRuntimeContext::RegisterMaterialColor(std::shared_ptr<SceneMaterial> material,
+                                                std::unique_ptr<DynamicValue> value) {
+    RegisterDynamicValueListener(std::move(value),
+        [weak = std::weak_ptr<SceneMaterial>(material)](const DynamicValue& v) {
+            if (auto m = weak.lock()) ApplyMaterialColor(*m, v.getVec3());
+        });
+}
+
+bool SceneRuntimeContext::SetNodeAlpha(std::string_view name, float alpha) {
+    const auto it = m_nodes.find(std::string(name));
+    if (it == m_nodes.end() || !it->second || !it->second->Mesh()) return false;
+    for (auto& material : it->second->Mesh()->MaterialSlots())
+        if (material) ApplyMaterialAlpha(*material, alpha);
+    return true;
+}
+
+bool SceneRuntimeContext::SetNodeColor(std::string_view name, const Eigen::Vector3f& color) {
+    const auto it = m_nodes.find(std::string(name));
+    if (it == m_nodes.end() || !it->second || !it->second->Mesh()) return false;
+    for (auto& material : it->second->Mesh()->MaterialSlots())
+        if (material) ApplyMaterialColor(*material, color);
+    return true;
 }
 
 void SceneRuntimeContext::RegisterDynamicValueListener(

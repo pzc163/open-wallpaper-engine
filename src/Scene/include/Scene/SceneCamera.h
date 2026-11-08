@@ -30,6 +30,8 @@ public:
     void AttatchNode(std::shared_ptr<SceneNode>);
 
     bool   IsPerspective() const { return m_perspective; }
+    bool   ReversedDepth() const { return m_reversedDepth; }
+    void SetReversedDepth(bool value) { m_reversedDepth = value; }
     double Aspect() const { return m_aspect; }
     double Width() const { return m_width; }
     double Height() const { return m_height; }
@@ -69,6 +71,8 @@ public:
         m_nearClip    = cam.m_nearClip;
         m_farClip     = cam.m_farClip;
         m_perspective = cam.m_perspective;
+        m_reversedDepth = cam.m_reversedDepth;
+        m_fov = cam.m_fov;
         m_isComposeLayer = cam.m_isComposeLayer;
     }
 
@@ -82,6 +86,7 @@ private:
     double m_farClip { 1000.0f };
     double m_fov { 45.0f };
     bool   m_perspective;
+    bool   m_reversedDepth { false };
 
     Eigen::Matrix4d m_viewMat { Eigen::Matrix4d::Identity() };
     Eigen::Matrix4d m_viewProjectionMat { Eigen::Matrix4d::Identity() };

@@ -7,6 +7,7 @@
 using namespace wallpaper::wpscene;
 
 bool WPLightObject::FromJson(const nlohmann::json& json,  fs::VFS&) {
+    FromCommonJson(json);
     GET_JSON_NAME_VALUE(json, "origin", origin);
     GET_JSON_NAME_VALUE(json, "angles", angles);
     GET_JSON_NAME_VALUE(json, "scale", scale);

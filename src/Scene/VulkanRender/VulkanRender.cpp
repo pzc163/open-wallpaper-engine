@@ -486,6 +486,7 @@ void VulkanRender::Impl::drawFrame(Scene& scene) {
 }
 
 void VulkanRender::Impl::executePreparedPasses(RenderingResources& rr) {
+    rr.cleared_depth_images.clear();
     size_t i = 0;
     while (i < m_passes.size()) {
         auto* pass = m_passes[i];
@@ -522,7 +523,7 @@ void VulkanRender::Impl::executePreparedPasses(RenderingResources& rr) {
                 continue;
             }
 
-            std::array<VkClearValue, 2> clear_values { entry.render.clear_value, VkClearValue {} };
+            std::array<VkClearValue, 3> clear_values { entry.render.clear_value, VkClearValue {}, VkClearValue {} };
             VkRenderPassBeginInfo pass_begin_info {
                 .sType       = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
                 .pNext       = nullptr,
@@ -536,6 +537,13 @@ void VulkanRender::Impl::executePreparedPasses(RenderingResources& rr) {
                 .clearValueCount = CustomPassBeginRenderPassClearValueCount(entry.render),
                 .pClearValues    = clear_values.data(),
             };
+            // Inputs can be outputs of an earlier batch. Record their barriers
+            // after those draws, outside the render pass that samples them.
+            for (size_t local = first; local < last; ++local) {
+                if (candidates[local].visible) {
+                    custom_passes[local]->recordTextureBarriers(rr);
+                }
+            }
             rr.command.BeginRenderPass(pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
 
             for (size_t local = first; local < last; ++local) {
@@ -549,10 +557,7 @@ void VulkanRender::Impl::executePreparedPasses(RenderingResources& rr) {
 }
 
 void VulkanRender::Impl::drawFrameSwapchain() {
-    static size_t resource_index = 0;
-
     RenderingResources& rr = m_rendering_resources;
-    resource_index         = (resource_index + 1) % 3;
     uint32_t image_index   = 0;
     {
         VVK_CHECK_VOID_RE(m_device->handle().AcquireNextImageKHR(*m_device->swapchain().handle(),
@@ -780,7 +785,7 @@ void VulkanRender::Impl::clearLastRenderGraph() {
 }
 
 void VulkanRender::Impl::compileRenderGraph(Scene& scene, rg::RenderGraph& rg) {
-    if (! m_inited) return;
+    if (!m_inited || !m_prepass || !m_finpass) return;
     m_pass_loaded = false;
 
     auto nodes             = rg.topologicalOrder();

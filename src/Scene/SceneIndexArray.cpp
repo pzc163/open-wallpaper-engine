@@ -8,8 +8,8 @@ SceneIndexArray::SceneIndexArray(std::size_t indexCount): m_size(0), m_capacity(
     m_pData = new uint32_t[m_capacity];
     std::memset(m_pData, 0, m_capacity * sizeof(uint32_t));
 }
-SceneIndexArray::SceneIndexArray(std::span<const uint32_t> data)
-    : m_size(data.size()), m_capacity(m_size) {
+SceneIndexArray::SceneIndexArray(std::span<const uint32_t> data, bool wide_indices)
+    : m_size(data.size()), m_capacity(m_size), m_wide_indices(wide_indices) {
     auto      dataSize = data.size();
     uint32_t* newdata  = new uint32_t[dataSize];
     std::memcpy(newdata, &data[0], DataSizeOf());
@@ -20,7 +20,7 @@ SceneIndexArray::SceneIndexArray(SceneIndexArray&& o) noexcept
       m_size(o.m_size),
       m_capacity(o.m_capacity),
       m_render_size(o.m_render_size),
-      m_id(o.m_id) {}
+      m_id(o.m_id), m_wide_indices(o.m_wide_indices) {}
 
 SceneIndexArray::~SceneIndexArray() {
     if (m_pData != nullptr) delete[] m_pData;

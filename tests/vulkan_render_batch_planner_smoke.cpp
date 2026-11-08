@@ -123,6 +123,30 @@ void singleSamplePassNeedsOnlyColorAttachment() {
     assert(plan.color_usage == VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
 }
 
+void depthAttachmentsSeparateBatchesAndFollowColorViews() {
+    auto flat = makeCandidate(0x100, 0x200, 64);
+    auto depth = flat;
+    depth.render.depth_image = reinterpret_cast<VkImage>(0x500);
+    depth.render.depth_view = reinterpret_cast<VkImageView>(0x600);
+    auto independent_depth = depth;
+    independent_depth.render.depth_image = reinterpret_cast<VkImage>(0x501);
+    independent_depth.render.depth_view = reinterpret_cast<VkImageView>(0x601);
+    const std::vector<CustomPassBatchCandidate> candidates { flat, depth, depth, independent_depth };
+    const auto plan = PlanCustomPassBatches(candidates);
+    assert(plan.entries.size() == 3);
+    assert(plan.entries[1].visible_draws == 2);
+    auto views = CustomPassFramebufferAttachmentViews(depth.render);
+    assert(views.size() == 2);
+    assert(views[1] == depth.render.depth_view);
+    depth.render.sample_count = VK_SAMPLE_COUNT_4_BIT;
+    depth.render.msaa_view = reinterpret_cast<VkImageView>(0x300);
+    views = CustomPassFramebufferAttachmentViews(depth.render);
+    assert(views.size() == 3);
+    assert(views[0] == depth.render.msaa_view);
+    assert(views[1] == depth.render.view);
+    assert(views[2] == depth.render.depth_view);
+}
+
 void multiSamplePassPlansResolveAttachmentAndClearSlot() {
     const auto plan = PlanCustomPassMsaaAttachments(VK_SAMPLE_COUNT_4_BIT);
 
@@ -245,6 +269,7 @@ int main() {
     differentOutputsDoNotBatch();
     differentSampleCountsDoNotBatch();
     differentMsaaSidecarsDoNotBatch();
+    depthAttachmentsSeparateBatchesAndFollowColorViews();
     singleSamplePassNeedsOnlyColorAttachment();
     multiSamplePassPlansResolveAttachmentAndClearSlot();
     beginRenderPassClearValueCountFollowsAttachmentPlan();

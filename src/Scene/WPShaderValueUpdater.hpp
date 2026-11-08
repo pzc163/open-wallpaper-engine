@@ -28,6 +28,8 @@ struct WPUniformInfo {
     bool has_ETVP { false };
     bool has_ETVPI { false };
     bool has_VP { false };
+    bool has_normal_model { false };
+    bool has_eye { false };
 
     bool has_BONES { false };
     bool has_TIME { false };
@@ -87,7 +89,7 @@ public:
     void SetNodeData(void*, uint32_t material_slot, const WPShaderValueData&);
     void SetCameraParallax(const WPCameraParallax& value) { m_parallax = value; }
 
-    void SetScreenSize(i32 w, i32 h) override { m_screen_size = { (float)w, (float)h }; }
+    void SetScreenSize(i32 w, i32 h) override;
 
 private:
     Scene*               m_scene;

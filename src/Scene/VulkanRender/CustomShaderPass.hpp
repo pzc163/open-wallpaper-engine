@@ -57,11 +57,14 @@ public:
         std::vector<bool>          video_textures;
         ImageParameters            vk_output;
         ImageParameters            vk_output_msaa;
+        ImageParameters            vk_depth;
+        bool                       reversed_depth { false };
 
         // bufs
         bool                          dyn_vertex { false };
         std::vector<StagingBufferRef> vertex_bufs;
         StagingBufferRef              index_buf;
+        VkIndexType                   index_type { VK_INDEX_TYPE_UINT16 };
         StagingBufferRef              ubo_buf;
 
         // pipeline
@@ -96,8 +99,9 @@ public:
 
     bool textureDescriptorsReady() const;
 
-private:
     void recordTextureBarriers(RenderingResources&) const;
+
+private:
     void recordDescriptors(RenderingResources&) const;
 
     Desc m_desc;

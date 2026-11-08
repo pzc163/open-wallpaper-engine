@@ -7,6 +7,8 @@
 #include "VulkanRender/PassCommon.hpp"
 #include "VulkanRender/SceneToRenderGraph.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -41,7 +43,23 @@ using wallpaper::vulkan::CustomShaderPass;
 
 class MemoryFs final : public wallpaper::fs::Fs {
 public:
-    explicit MemoryFs(std::map<std::string, std::string> files): m_files(std::move(files)) {}
+    explicit MemoryFs(std::map<std::string, std::string> files): m_files(std::move(files)) {
+        // Common engine shader used to present an isolated image-layer output.
+        m_files.try_emplace("/shaders/passthrough.vert", R"(
+uniform mat4 g_ModelViewProjectionMatrix;
+attribute vec3 a_Position;
+attribute vec2 a_TexCoord;
+varying vec2 v_TexCoord;
+void main() {
+    gl_Position = g_ModelViewProjectionMatrix * vec4(a_Position, 1.0);
+    v_TexCoord = a_TexCoord;
+})");
+        m_files.try_emplace("/shaders/passthrough.frag", R"(
+uniform sampler2D g_Texture0;
+varying vec2 v_TexCoord;
+void main() { gl_FragColor = texture(g_Texture0, v_TexCoord); }
+)");
+    }
 
     bool Contains(std::string_view path) const override {
         return m_files.contains(std::string(path));
@@ -1376,7 +1394,7 @@ void linkedImageCompositeTexturesResolveToSourceLayerOutput() {
     assert(copy_it != passes.end());
 }
 
-void parsedInvisibleDependencySourceResolvesLinkedRenderTexture() {
+void parsedInvisibleDependencySourceResolvesLinkedRenderTexture(bool compose, bool with_effect) {
     wallpaper::fs::VFS vfs;
     auto files = std::map<std::string, std::string> {
         { "/image.json", R"({"width":64,"height":32,"material":"mat.json"})" },
@@ -1404,6 +1422,18 @@ void main() {
 )" },
         { "/materials/a.tex.tex", "" },
     };
+    if (compose) {
+        files["/models/util/composelayer.json"] =
+            R"({"material":"compose_mat.json","passthrough":true})";
+        files["/compose_mat.json"] =
+            R"({"passes":[{"blending":"translucent","shader":"composelayer","textures":["_rt_FullFrameBuffer"]}]})";
+        files["/shaders/composelayer.vert"] = files.at("/shaders/genericimage.vert");
+        files["/shaders/composelayer.frag"] = files.at("/shaders/genericimage.frag");
+    }
+    files["/effects/process/effect.json"] =
+        R"({"name":"process","passes":[{"material":"process_mat.json"}]})";
+    files["/process_mat.json"] =
+        R"({"passes":[{"blending":"normal","shader":"genericimage","textures":[null]}]})";
     assert(vfs.Mount("/assets", std::make_unique<MemoryFs>(std::move(files))));
 
     wallpaper::audio::SoundManager sound_manager;
@@ -1425,9 +1455,23 @@ void main() {
       ]
     })";
 
-    auto parsed = parser.Parse("linked-invisible-dependency", scene_json, vfs, sound_manager);
+    auto input = nlohmann::json::parse(scene_json);
+    auto& source_object = input["objects"][0];
+    source_object["origin"] = {128, 96, 0};
+    if (compose) {
+        source_object["image"] = "models/util/composelayer.json";
+        source_object["size"] = {64, 32};
+    }
+    if (with_effect) {
+        source_object["effects"] = nlohmann::json::array({
+            {{"file", "effects/process/effect.json"}, {"id", 161}, {"visible", true}}
+        });
+    }
+    auto parsed = parser.Parse("linked-invisible-dependency", input.dump(), vfs, sound_manager);
     assert(parsed != nullptr);
+    auto* active_camera = parsed->activeCamera;
     installDefaultTargets(*parsed);
+    parsed->activeCamera = active_camera;
 
     const auto graph  = wallpaper::sceneToRenderGraph(*parsed);
     const auto passes = graphPasses(*graph);
@@ -1440,6 +1484,24 @@ void main() {
         return pass.copy != nullptr && pass.copy->desc().dst == wallpaper::GenLinkTex(159);
     });
     assert(copy_it != passes.end());
+    const auto& exported = copy_it->copy->desc().src;
+    assert(exported != SpecTex_Default);
+    const auto& extent = parsed->renderTargets.at(exported);
+    assert(extent.width == 64 && extent.height == 32);
+
+    const auto* source_pass = findCustomPassByNodeName(passes, "dependency source");
+    if (with_effect) {
+        // The exported texture must include the source's effects, rather than
+        // the base capture or the scene after unrelated layers were composed.
+        assert(exported != source_pass->desc().output);
+    } else {
+        assert(exported == source_pass->desc().output);
+    }
+    if (compose) {
+        assert(!source_pass->desc().node->HasRenderTransformOverride());
+        assert(!source_pass->desc().camera_override.empty());
+        assert(parsed->cameras.at(source_pass->desc().camera_override).get() == active_camera);
+    }
 }
 
 void parsedZeroHeightDependencyEffectUsesNonZeroRenderTargets() {
@@ -1750,6 +1812,33 @@ void main() {
     assert(runtime_target.width * runtime_target.height > 4);
 }
 
+void fullscreenFinalPassUsesScreenQuadInsteadOfPerspectiveWorldCoordinates() {
+    auto owner = makeNode("fullscreen owner");
+    auto final = makeNode("fullscreen final");
+    auto effect = std::make_shared<SceneImageEffect>();
+    effect->nodes.push_back({.output = std::string(SpecTex_Default), .sceneNode = final});
+    SceneImageEffectLayer layer(owner.get(), 1920, 1080,
+                               "_rt_EffectPPongA_test", "_rt_EffectPPongB_test");
+    layer.AddEffect(effect);
+    layer.SetFullscreen(true);
+    layer.SetFinalBlend(wallpaper::BlendMode::Translucent);
+    layer.FinalNode().SetTranslate(Eigen::Vector3f(960, 540, 0));
+    SceneMesh screen_mesh;
+    wallpaper::SceneVertexArray vertices({{"a_Position", wallpaper::VertexType::FLOAT3}}, 4);
+    vertices.SetVertex("a_Position", std::array<float,12>{-1,-1,0,-1,1,0,1,-1,0,1,1,0});
+    screen_mesh.AddVertexArray(std::move(vertices));
+    for (int rebuild = 0; rebuild < 2; ++rebuild) {
+        layer.ResolveEffect(screen_mesh, "effect");
+        assert(layer.ResolvedFinalRenderNode() == final.get());
+        assert(final->Camera() == "effect");
+        assert(final->RenderTrans().isApprox(Eigen::Matrix4d::Identity()));
+        const auto& v = final->Mesh()->GetVertexArray(0);
+        assert(v.VertexCount() == 4);
+        const auto last = 3 * v.OneSize();
+        assert(v.Data()[0] == -1 && v.Data()[last] == 1 && v.Data()[last + 1] == 1);
+    }
+}
+
 void screenBoundSizingHonorsTinyAuthoredDefaultExtent() {
     Scene scene;
     scene.ortho[0] = 640;
@@ -1861,11 +1950,14 @@ int main() {
     nullPostProcessPassNodesAreSkipped();
     postProcessCopyStepsResolveRenderTargetAliases();
     linkedImageCompositeTexturesResolveToSourceLayerOutput();
-    parsedInvisibleDependencySourceResolvesLinkedRenderTexture();
+    parsedInvisibleDependencySourceResolvesLinkedRenderTexture(false, false);
+    parsedInvisibleDependencySourceResolvesLinkedRenderTexture(false, true);
+    parsedInvisibleDependencySourceResolvesLinkedRenderTexture(true, true);
     parsedZeroHeightDependencyEffectUsesNonZeroRenderTargets();
     linkedEffectSourceFallsBackToBaseTargetWhenEffectsFailToLoad();
     linkedEffectSourceDoesNotUseIntermediateTargetAsFallback();
     parsedFullscreenScaledFbosStayValidAfterScreenBindSizing();
+    fullscreenFinalPassUsesScreenQuadInsteadOfPerspectiveWorldCoordinates();
     screenBoundSizingHonorsTinyAuthoredDefaultExtent();
     textureDescriptorReadinessRejectsMissingImages();
     textureDescriptorReadinessRejectsMissingSeparateSampler();
